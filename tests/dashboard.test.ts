@@ -112,6 +112,31 @@ describe('dashboard server', () => {
     }
   });
 
+  it('creates the first task from the dashboard API before manual init', async () => {
+    const repo = await createTempGitRepo();
+    dirs.push(repo);
+
+    const server = await createDashboardServer({ cwd: repo, port: 0 });
+    try {
+      const response = await postAction(server.url, 'create-task', {
+        title: '网页首个任务',
+        description: '没有 config.json 时也能从网页创建。',
+        checkout: true
+      });
+
+      expect(response.ok).toBe(true);
+      expect(response.message).toBe('任务已创建');
+      expect(response.state.status.activeTask.title).toBe('网页首个任务');
+      expect(response.state.primaryAction).toEqual({
+        action: 'codex-prompt',
+        label: '生成执行提示',
+        enabled: true
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
   it('serves cockpit state with pipeline and handoff content', async () => {
     const repo = await createTempGitRepo();
     dirs.push(repo);

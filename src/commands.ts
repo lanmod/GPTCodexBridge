@@ -59,7 +59,7 @@ export async function createTask(options: CreateTaskOptions): Promise<BridgeTask
     throw new Error('Tasks must be created inside a Git repository.');
   }
 
-  const config = await readConfig(options.cwd);
+  const config = await readOrCreateConfig(options.cwd);
   const now = new Date().toISOString();
   const slug = slugify(options.title, now);
   const task: BridgeTask = {
@@ -82,6 +82,18 @@ export async function createTask(options: CreateTaskOptions): Promise<BridgeTask
   }
 
   return task;
+}
+
+async function readOrCreateConfig(cwd: string) {
+  try {
+    return await readConfig(cwd);
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      await writeDefaultConfig(cwd);
+      return readConfig(cwd);
+    }
+    throw error;
+  }
 }
 
 export async function getBridgeStatus(context: CommandContext): Promise<BridgeStatus> {

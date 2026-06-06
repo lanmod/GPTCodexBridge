@@ -40,6 +40,23 @@ describe('createTask', () => {
     expect(stored.createdAt).toEqual(stored.updatedAt);
   });
 
+  it('auto-initializes bridge config when creating the first task', async () => {
+    const repo = await createTempGitRepo();
+    dirs.push(repo);
+
+    const task = await createTask({
+      cwd: repo,
+      title: '网页直接创建任务',
+      description: '没有手动 init 时也应该能创建任务。',
+      checkout: true
+    });
+
+    const configPath = path.join(repo, '.webcodexbridge', 'config.json');
+    expect((await stat(configPath)).isFile()).toBe(true);
+    expect(task.branchName).toMatch(/^wb\//);
+    expect(await runGit(repo, ['branch', '--show-current'])).toBe(task.branchName);
+  });
+
   it('creates and checks out the task branch when requested', async () => {
     const repo = await createTempGitRepo();
     dirs.push(repo);
