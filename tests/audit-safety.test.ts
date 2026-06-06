@@ -135,8 +135,20 @@ describe('audit safety', () => {
       execFileSync('node', [cliPath, 'init', '--project'], { stdio: 'pipe' });
       expect.fail('CLI should have failed with missing project path');
     } catch (error: any) {
-      expect(error.status).toBe(1);
-      expect(error.stderr.toString()).toContain('--project 需要指定目标项目目录');
+      if (error.code === 'ENOENT' || (error.stderr && error.stderr.toString().includes('Cannot find module'))) {
+        // Build and retry
+        execFileSync('npm', ['run', 'build'], { cwd: process.cwd(), stdio: 'pipe' });
+        try {
+          execFileSync('node', [cliPath, 'init', '--project'], { stdio: 'pipe' });
+          expect.fail('CLI should have failed with missing project path');
+        } catch (retryError: any) {
+          expect(retryError.status).toBe(1);
+          expect(retryError.stderr.toString()).toContain('--project 需要指定目标项目目录');
+        }
+      } else {
+        expect(error.status).toBe(1);
+        expect(error.stderr.toString()).toContain('--project 需要指定目标项目目录');
+      }
     }
   });
 });
