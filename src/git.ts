@@ -28,12 +28,32 @@ export async function getCurrentBranch(cwd: string): Promise<string> {
   return runGit(cwd, ['branch', '--show-current']);
 }
 
+export async function getRemoteUrl(cwd: string, remote = 'origin'): Promise<string | null> {
+  try {
+    return await runGit(cwd, ['remote', 'get-url', remote]);
+  } catch {
+    return null;
+  }
+}
+
 export async function getHeadCommit(cwd: string): Promise<string> {
   return runGit(cwd, ['rev-parse', 'HEAD']);
 }
 
 export async function createAndCheckoutBranch(cwd: string, branchName: string): Promise<void> {
   await runGit(cwd, ['switch', '-c', branchName]);
+}
+
+export async function setRemoteUrl(cwd: string, remoteUrl: string, remote = 'origin'): Promise<void> {
+  if (await getRemoteUrl(cwd, remote)) {
+    await runGit(cwd, ['remote', 'set-url', remote, remoteUrl]);
+    return;
+  }
+  await runGit(cwd, ['remote', 'add', remote, remoteUrl]);
+}
+
+export async function pushBranch(cwd: string, branchName: string, remote = 'origin'): Promise<void> {
+  await runGit(cwd, ['push', '-u', remote, branchName]);
 }
 
 export async function getStatusShort(cwd: string): Promise<string> {
