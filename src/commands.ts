@@ -438,7 +438,7 @@ function hasNonBridgeDirtyChanges(statusShort: string): boolean {
     .some((line) => !line.slice(3).startsWith('.webcodexbridge/'));
 }
 
-async function checkNotToolRepository(cwd: string, options: { internalDogfood?: boolean }): Promise<void> {
+export async function checkNotToolRepository(cwd: string, options: { internalDogfood?: boolean }): Promise<void> {
   if (options.internalDogfood) {
     return;
   }

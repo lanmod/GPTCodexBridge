@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import {
   checkBridgeEnvironment,
+  checkNotToolRepository,
   commitTask,
   createCodexPrompt,
   createGithubPackage,
@@ -148,9 +149,11 @@ async function runDashboardAction(
     });
     message = 'GitHub 交接包已生成';
   } else if (action === 'github-set-remote') {
+    await checkNotToolRepository(cwd, { internalDogfood });
     await setRemoteUrl(cwd, requiredString(body.remoteUrl, 'GitHub remote URL 不能为空'));
     message = 'GitHub remote 已设置';
   } else if (action === 'github-push-branches') {
+    await checkNotToolRepository(cwd, { internalDogfood });
     const status = await getBridgeStatus({ cwd });
     const task = status.activeTask;
     if (!task) {

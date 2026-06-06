@@ -457,6 +457,43 @@ describe('dashboard server', () => {
       await server.close();
     }
   });
+
+  it('rejects github actions in the tool repository when internalDogfood is false', async () => {
+    const repo = await createTempGitRepo();
+    dirs.push(repo);
+
+    // Mock package.json designating this as the tool repository
+    await writeFile(
+      path.join(repo, 'package.json'),
+      JSON.stringify({
+        name: 'webcodexbridge',
+        bin: { wcb: './dist/cli.js' }
+      }),
+      'utf8'
+    );
+    execFileSync('git', ['add', 'package.json'], { cwd: repo });
+    execFileSync('git', ['commit', '-m', 'add package.json'], { cwd: repo });
+
+    await initBridge({ cwd: repo, internalDogfood: true });
+
+    // Start dashboard server with default options (internalDogfood is false/undefined)
+    const server = await createDashboardServer({ cwd: repo, port: 0 });
+    try {
+      // 1. github-set-remote should fail
+      const setRemoteRes = await postAction(server.url, 'github-set-remote', {
+        remoteUrl: 'https://github.com/lanmod/GPTCodexBridge.git'
+      });
+      expect(setRemoteRes.error).toContain('当前目录为 WebCodexBridge 工具源码仓库本身');
+
+      // 2. github-push-branches should fail
+      const pushBranchesRes = await postAction(server.url, 'github-push-branches', {
+        base: 'main'
+      });
+      expect(pushBranchesRes.error).toContain('当前目录为 WebCodexBridge 工具源码仓库本身');
+    } finally {
+      await server.close();
+    }
+  });
 });
 
 async function postAction(serverUrl: string, action: string, body: Record<string, unknown>) {
