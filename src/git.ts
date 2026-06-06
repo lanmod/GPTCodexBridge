@@ -124,3 +124,8 @@ export async function runShell(cwd: string, command: string): Promise<{ exitCode
     throw error;
   }
 }
+
+export async function getGitTopLevel(cwd: string): Promise<string> {
+  return runGit(cwd, ['rev-parse', '--show-toplevel']);
+}
+

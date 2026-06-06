@@ -7,6 +7,7 @@ export type BridgeConfig = {
 export type CommandContext = {
   cwd: string;
   internalDogfood?: boolean;
+  allowSubdirProject?: boolean;
 };
 
 export type InitResult = {

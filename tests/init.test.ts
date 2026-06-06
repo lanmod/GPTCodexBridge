@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { initBridge } from '../src/commands.js';
 import { createTempGitRepo, removeTempDir } from './helpers.js';
@@ -49,10 +49,27 @@ describe('initBridge', () => {
     // Attempting to initialize should throw
     await expect(initBridge({ cwd: repo }))
       .rejects
-      .toThrow('当前目录为 WebCodexBridge 工具源码仓库本身');
+      .toThrow('当前目录或所在的 Git 仓库根目录为 WebCodexBridge 工具源码仓库本身');
 
     // Using internalDogfood bypass should succeed
     const result = await initBridge({ cwd: repo, internalDogfood: true });
     expect(result.configPath).toBe(path.join(repo, '.webcodexbridge', 'config.json'));
+  });
+
+  it('rejects initialization inside a Git subdirectory by default, but allowSubdirProject bypasses it', async () => {
+    const repo = await createTempGitRepo();
+    dirs.push(repo);
+
+    const subdir = path.join(repo, 'sub-folder');
+    await mkdir(subdir);
+
+    // Initializing in subdirectory should throw
+    await expect(initBridge({ cwd: subdir }))
+      .rejects
+      .toThrow('当前目录不是 Git 仓库根目录');
+
+    // Using allowSubdirProject bypass should succeed
+    const result = await initBridge({ cwd: subdir, allowSubdirProject: true });
+    expect(result.configPath).toBe(path.join(subdir, '.webcodexbridge', 'config.json'));
   });
 });

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -8,6 +8,7 @@ import {
   getCurrentBranch,
   getCodeDiffAgainstHead,
   getCodeDiffStatAgainstHead,
+  getGitTopLevel,
   getHeadCommit,
   getStatusShort,
   isGitRepository,
@@ -50,6 +51,17 @@ import type {
 export async function initBridge(context: CommandContext): Promise<InitResult> {
   if (!(await isGitRepository(context.cwd))) {
     throw new Error('WebCodexBridge must be initialized inside a Git repository.');
+  }
+
+  const gitRoot = await getGitTopLevel(context.cwd);
+  const realCwd = await realpath(context.cwd);
+  const realGitRoot = await realpath(gitRoot);
+  if (realCwd !== realGitRoot && !context.allowSubdirProject) {
+    throw new Error(
+      `当前目录不是 Git 仓库根目录。\n` +
+      `Git 根目录为：${gitRoot}\n` +
+      `强烈建议在 Git 仓库根目录下运行 init。如果确实需要在子目录中初始化，请使用 --allow-subdir-project 参数。`
+    );
   }
 
   await checkNotToolRepository(context.cwd, context);
@@ -435,14 +447,24 @@ function hasNonBridgeDirtyChanges(statusShort: string): boolean {
   return statusShort
     .split('\n')
     .filter(Boolean)
-    .some((line) => !line.slice(3).startsWith('.webcodexbridge/'));
+    .some((line) => {
+      const filePath = line.slice(3).replace(/\\/g, '/');
+      const isBridgeFile = filePath.startsWith('.webcodexbridge/') || filePath.includes('/.webcodexbridge/');
+      return !isBridgeFile;
+    });
 }
 
 export async function checkNotToolRepository(cwd: string, options: { internalDogfood?: boolean }): Promise<void> {
   if (options.internalDogfood) {
     return;
   }
-  const packageJsonPath = path.join(cwd, 'package.json');
+  let gitRoot = cwd;
+  try {
+    gitRoot = await getGitTopLevel(cwd);
+  } catch {
+    // Fallback to cwd if getGitTopLevel fails
+  }
+  const packageJsonPath = path.join(gitRoot, 'package.json');
   try {
     const content = await readFile(packageJsonPath, 'utf8');
     const pkg = JSON.parse(content);
@@ -451,13 +473,13 @@ export async function checkNotToolRepository(cwd: string, options: { internalDog
     const hasWcbBin = pkg.bin && typeof pkg.bin === 'object' && 'wcb' in pkg.bin;
     if (isWcbName && hasWcbBin) {
       throw new Error(
-        '当前目录为 WebCodexBridge 工具源码仓库本身。\n' +
+        '当前目录或所在的 Git 仓库根目录为 WebCodexBridge 工具源码仓库本身。\n' +
         '不建议在工具源码仓库内直接创建或操作业务项目任务。\n' +
         '请进入您实际的开发项目目录后再运行 wcb 命令。如果确实需要在此开发 Bridge 自身，请使用 --internal-dogfood 参数。'
       );
     }
   } catch (error) {
-    if (error instanceof Error && error.message.includes('当前目录为 WebCodexBridge 工具源码仓库本身')) {
+    if (error instanceof Error && error.message.includes('当前目录或所在的 Git 仓库根目录为 WebCodexBridge 工具源码仓库本身')) {
       throw error;
     }
   }

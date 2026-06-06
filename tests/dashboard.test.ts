@@ -483,13 +483,13 @@ describe('dashboard server', () => {
       const setRemoteRes = await postAction(server.url, 'github-set-remote', {
         remoteUrl: 'https://github.com/lanmod/GPTCodexBridge.git'
       });
-      expect(setRemoteRes.error).toContain('当前目录为 WebCodexBridge 工具源码仓库本身');
+      expect(setRemoteRes.error).toContain('当前目录或所在的 Git 仓库根目录为 WebCodexBridge 工具源码仓库本身');
 
       // 2. github-push-branches should fail
       const pushBranchesRes = await postAction(server.url, 'github-push-branches', {
         base: 'main'
       });
-      expect(pushBranchesRes.error).toContain('当前目录为 WebCodexBridge 工具源码仓库本身');
+      expect(pushBranchesRes.error).toContain('当前目录或所在的 Git 仓库根目录为 WebCodexBridge 工具源码仓库本身');
     } finally {
       await server.close();
     }

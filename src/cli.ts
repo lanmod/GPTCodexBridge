@@ -18,8 +18,12 @@ import { createDashboardServer } from './dashboard.js';
 async function main(): Promise<void> {
   const projectIndex = process.argv.indexOf('--project');
   let cwd = process.cwd();
-  if (projectIndex !== -1 && process.argv[projectIndex + 1]) {
-    cwd = path.resolve(process.cwd(), process.argv[projectIndex + 1]);
+  if (projectIndex !== -1) {
+    const value = process.argv[projectIndex + 1];
+    if (!value || value.startsWith('--')) {
+      throw new Error('--project 需要指定目标项目目录');
+    }
+    cwd = path.resolve(process.cwd(), value);
     process.argv.splice(projectIndex, 2);
   }
 
@@ -32,7 +36,11 @@ async function main(): Promise<void> {
   const [command] = process.argv.slice(2);
 
   if (command === 'init') {
-    const result = await initBridge({ cwd, internalDogfood });
+    const result = await initBridge({
+      cwd,
+      internalDogfood,
+      allowSubdirProject: process.argv.includes('--allow-subdir-project')
+    });
     console.log(`Initialized WebCodexBridge at ${result.configPath}`);
     return;
   }
@@ -148,7 +156,7 @@ Global Options:
 
 Commands:
   doctor
-  init
+  init [--allow-subdir-project]
   task create --title "..." --description "..." [--checkout] [--allow-dirty]
   codex prompt [--verify "..."]
   status

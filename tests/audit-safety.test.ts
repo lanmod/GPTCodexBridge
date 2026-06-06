@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { commitTask, createSnapshot, createTask, initBridge, rollbackTask } from '../src/commands.js';
@@ -78,7 +78,7 @@ describe('audit safety', () => {
     // Attempting to create a task should throw
     await expect(createTask({ cwd: repo, title: 'self test', description: 'self test' }))
       .rejects
-      .toThrow('当前目录为 WebCodexBridge 工具源码仓库本身');
+      .toThrow('当前目录或所在的 Git 仓库根目录为 WebCodexBridge 工具源码仓库本身');
 
     // Using internalDogfood bypass should succeed
     const task = await createTask({
@@ -89,6 +89,55 @@ describe('audit safety', () => {
       checkout: true
     });
     expect(task.title).toBe('dogfood test');
+  });
+
+  it('rejects task actions when executed in a subdirectory of the WCB tool repository', async () => {
+    const repo = await createTempGitRepo();
+    dirs.push(repo);
+
+    // Mock package.json designating this as the tool repository at the Git root
+    await writeFile(
+      path.join(repo, 'package.json'),
+      JSON.stringify({
+        name: 'webcodexbridge',
+        bin: { wcb: './dist/cli.js' }
+      }),
+      'utf8'
+    );
+    execFileSync('git', ['add', 'package.json'], { cwd: repo });
+    execFileSync('git', ['commit', '-m', 'add package.json'], { cwd: repo });
+
+    await initBridge({ cwd: repo, internalDogfood: true });
+
+    // Create a subdirectory under git root
+    const subdir = path.join(repo, 'my-sub-project');
+    await mkdir(subdir);
+
+    // Attempting to create a task inside the subdirectory should throw because the Git root is identified as the tool repository
+    await expect(createTask({ cwd: subdir, title: 'sub test', description: 'sub test' }))
+      .rejects
+      .toThrow('当前目录或所在的 Git 仓库根目录为 WebCodexBridge 工具源码仓库本身');
+
+    // Using internalDogfood bypass should succeed
+    const task = await createTask({
+      cwd: subdir,
+      title: 'sub dogfood test',
+      description: 'sub dogfood test',
+      internalDogfood: true,
+      checkout: true
+    });
+    expect(task.title).toBe('sub dogfood test');
+  });
+
+  it('throws an error when CLI is invoked with --project but no path is specified', async () => {
+    const cliPath = path.resolve(process.cwd(), 'dist/cli.js');
+    try {
+      execFileSync('node', [cliPath, 'init', '--project'], { stdio: 'pipe' });
+      expect.fail('CLI should have failed with missing project path');
+    } catch (error: any) {
+      expect(error.status).toBe(1);
+      expect(error.stderr.toString()).toContain('--project 需要指定目标项目目录');
+    }
   });
 });
 
