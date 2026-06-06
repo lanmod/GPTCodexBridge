@@ -191,7 +191,7 @@ export async function createCodexPrompt(options: CodexPromptOptions): Promise<Co
   const verifyCommand = options.verifyCommand ?? 'npm test -- --run';
   const promptPath = path.join(options.cwd, bridgeDirName, 'tasks', task.id, 'codex-prompt.md');
   const markdown = [
-    '# Codex 执行提示',
+    '# 执行 Agent 执行提示',
     '',
     `任务 ID：${task.id}`,
     `任务标题：${task.title}`,
@@ -217,7 +217,7 @@ export async function createCodexPrompt(options: CodexPromptOptions): Promise<Co
     '',
     '## 完成后',
     '',
-    `完成后运行 \`wcb snapshot --verify "${verifyCommand}"\`，生成给 ChatGPT 和 GitHub PR 使用的结果包。`,
+    `完成后运行 \`wcb snapshot --verify "${verifyCommand}"\`，生成给评审 AI 和 GitHub PR 使用的结果包。`,
     ''
   ].join('\n');
 
@@ -292,9 +292,9 @@ export async function createGithubPackage(options: GithubPackageOptions): Promis
     '',
     fence(['git push -u origin ' + task.branchName, `gh pr create --base ${base} --head ${task.branchName} --title "${task.title}" --body-file "${snapshotPath}"`].join('\n')),
     '',
-    '## 给 ChatGPT 的评审提示',
+    '## 给评审 AI 的评审提示',
     '',
-    `请读取这个 PR，帮我评审这次 Codex 修改是否合理。重点看风险点、遗漏测试、回滚风险，以及是否需要继续修改。PR 标题是「${task.title}」，任务分支是 \`${task.branchName}\`，Bridge 生成的结果包在 PR body 中。`,
+    `请读取这个 PR，帮我评审这次执行 Agent 修改是否合理。重点看风险点、遗漏测试、回滚风险，以及是否需要继续修改。PR 标题是「${task.title}」，任务分支是 \`${task.branchName}\`，Bridge 生成的结果包在 PR body 中。`,
     ''
   ].join('\n');
 

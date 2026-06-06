@@ -38,6 +38,12 @@ type PipelineStep = {
   detail: string;
 };
 
+type PrimaryAction = {
+  action: string;
+  label: string;
+  enabled: boolean;
+};
+
 export async function createDashboardServer(options: DashboardServerOptions): Promise<DashboardServer> {
   const host = options.host ?? '127.0.0.1';
   const server = createServer(async (request, response) => {
@@ -95,7 +101,7 @@ async function runDashboardAction(cwd: string, action: string, body: Record<stri
       cwd,
       verifyCommand: optionalString(body.verifyCommand)
     });
-    message = 'Codex 执行提示已生成';
+    message = '执行提示已生成';
   } else if (action === 'snapshot') {
     await createSnapshot({
       cwd,
@@ -184,33 +190,61 @@ async function readDashboardState(cwd: string) {
   const github = task ? await readOptionalArtifact(cwd, task.id, 'github-pr-package.md') : null;
   const environment = await checkBridgeEnvironment({ cwd });
   const onlyGithubPackageDirty = task ? isOnlyGithubPackageDirty(status.statusShort, task.id) : false;
-  const hasCodeChanges = status.isDirty && !onlyGithubPackageDirty;
+  const hasCodeChanges = hasNonBridgeDirtyChanges(status.statusShort);
   const pipeline = buildPipeline(Boolean(task), Boolean(codex), hasCodeChanges, Boolean(latestSnapshot), task?.status, Boolean(github));
+  const primaryAction = buildPrimaryAction({
+    hasTask: Boolean(task),
+    hasCodexPrompt: Boolean(codex),
+    hasCodeChanges,
+    hasSnapshot: Boolean(latestSnapshot),
+    taskStatus: task?.status,
+    hasGithubPackage: Boolean(github)
+  });
+  const stage = buildStage(pipeline, Boolean(github), primaryAction);
+  const executorHandoff = codex
+    ? {
+        label: '给执行 Agent',
+        path: codex.path,
+        content: codex.content
+      }
+    : null;
+  const reviewerHandoff = latestSnapshot
+    ? {
+        label: '给评审 AI',
+        path: latestSnapshot.path,
+        content: [
+          '请基于这个 snapshot 评审执行 Agent 的修改，重点看风险、遗漏测试和回滚风险。',
+          '',
+          latestSnapshot.content
+        ].join('\n')
+      }
+    : null;
+  const githubHandoff = github
+    ? {
+        label: '给 GitHub',
+        path: github.path,
+        content: github.content
+      }
+    : null;
 
   return {
     status,
     workspace: {
       hasCodeChanges,
-      label: status.isDirty ? onlyGithubPackageDirty ? '仅交接包未提交' : '有未提交改动' : '干净'
+      label: status.isDirty ? onlyGithubPackageDirty ? '仅交接包未提交' : hasCodeChanges ? '有未提交改动' : '仅 Bridge 记录未提交' : '干净'
     },
-    stage: buildStage(pipeline, Boolean(github)),
+    stage,
+    primaryAction,
     pipeline,
     environment,
     diffStat: (await getDiffStat(cwd)) || 'no diff',
     latestSnapshot,
     handoffs: {
       codex,
-      chatgpt: latestSnapshot
-        ? {
-            path: latestSnapshot.path,
-            content: [
-              '请基于这个 snapshot 评审 Codex 修改，重点看风险、遗漏测试和回滚风险。',
-              '',
-              latestSnapshot.content
-            ].join('\n')
-          }
-        : null,
-      github
+      chatgpt: reviewerHandoff,
+      executor: executorHandoff,
+      reviewer: reviewerHandoff,
+      github: githubHandoff
     },
     commands: {
       codexPrompt: 'wcb codex prompt --verify "npm test -- --run"',
@@ -252,13 +286,13 @@ function buildPipeline(
     },
     {
       id: 'codex-prompt',
-      label: '生成 Codex 执行提示',
+      label: '生成执行提示',
       state: hasCodexPrompt ? 'done' : hasTask ? 'ready' : 'todo',
-      detail: hasCodexPrompt ? '执行提示已准备' : '把任务交接给 Codex'
+      detail: hasCodexPrompt ? '执行提示已准备' : '把任务交接给执行 Agent'
     },
     {
       id: 'codex-work',
-      label: 'Codex 修改代码',
+      label: '执行 Agent 修改代码',
       state: isDirty || hasSnapshot || taskStatus === 'committed' ? 'done' : hasCodexPrompt ? 'ready' : 'todo',
       detail: isDirty ? '工作区已有改动' : hasSnapshot || taskStatus === 'committed' ? '已有执行结果' : '等待本地代码改动'
     },
@@ -278,7 +312,7 @@ function buildPipeline(
       id: 'github',
       label: 'GitHub 交接 / PR',
       state: hasGithubPackage ? 'ready' : taskStatus === 'committed' ? 'ready' : 'todo',
-      detail: hasGithubPackage ? '交接包已生成，可复制给 ChatGPT 或发布 PR' : '生成 PR 交接包'
+      detail: hasGithubPackage ? '交接包已生成，可复制给评审 AI 或发布 PR' : '生成 PR 交接包'
     }
   ];
 }
@@ -295,13 +329,30 @@ function isOnlyGithubPackageDirty(statusShort: string, taskId: string): boolean 
     .every((line) => line.slice(3) === allowedPath);
 }
 
-function buildStage(pipeline: PipelineStep[], hasGithubPackage: boolean) {
+function hasNonBridgeDirtyChanges(statusShort: string): boolean {
+  return statusShort
+    .split('\n')
+    .filter(Boolean)
+    .some((line) => !line.slice(3).startsWith('.webcodexbridge/'));
+}
+
+function buildStage(pipeline: PipelineStep[], hasGithubPackage: boolean, primaryAction: PrimaryAction) {
+  if (primaryAction.action === 'copy-reviewer') {
+    return {
+      id: 'review-ready',
+      label: '等待评审 AI',
+      nextAction: '复制 snapshot 交给评审 AI，看风险、遗漏测试和回滚风险。',
+      nextLocation: '评审 AI'
+    };
+  }
+
   const readyStep = pipeline.find((step) => step.state === 'ready');
   if (hasGithubPackage) {
     return {
       id: 'github-ready',
-      label: '可交给 GitHub / ChatGPT',
-      nextAction: '复制 GitHub 交接包，或在 GitHub 环境可用后发布 PR。'
+      label: '可交给 GitHub / 评审 AI',
+      nextAction: '复制 GitHub 交接包，或在 GitHub 环境可用后发布 PR。',
+      nextLocation: '网页操作台 / GitHub'
     };
   }
 
@@ -309,24 +360,69 @@ function buildStage(pipeline: PipelineStep[], hasGithubPackage: boolean) {
     return {
       id: 'complete',
       label: '任务闭环已完成',
-      nextAction: '可以开始下一个任务。'
+      nextAction: '可以开始下一个任务。',
+      nextLocation: '网页操作台'
     };
   }
 
   const nextByStep: Record<string, string> = {
-    task: '创建任务，把 ChatGPT 的任务说明写入 Bridge。',
-    'codex-prompt': '生成 Codex 执行提示，然后交给 Codex 修改代码。',
-    'codex-work': '让 Codex 在当前任务分支上执行修改。',
-    snapshot: '生成 snapshot，交给 ChatGPT 评审。',
+    task: '创建任务，把评审 AI 梳理好的任务说明写入 Bridge。',
+    'codex-prompt': '生成执行提示，然后交给执行 Agent 修改代码。',
+    'codex-work': '让执行 Agent 在当前任务分支上执行修改。',
+    snapshot: '生成 snapshot，交给评审 AI 评审。',
     commit: '确认 snapshot 后进行本地提交。',
     github: '生成 GitHub 交接包，或发布 PR。'
+  };
+  const locationByStep: Record<string, string> = {
+    task: '网页操作台',
+    'codex-prompt': '网页操作台',
+    'codex-work': '执行 Agent',
+    snapshot: '网页操作台',
+    commit: '网页操作台',
+    github: '网页操作台 / GitHub'
   };
 
   return {
     id: readyStep.id,
     label: readyStep.label,
-    nextAction: nextByStep[readyStep.id]
+    nextAction: nextByStep[readyStep.id],
+    nextLocation: locationByStep[readyStep.id]
   };
+}
+
+function buildPrimaryAction(state: {
+  hasTask: boolean;
+  hasCodexPrompt: boolean;
+  hasCodeChanges: boolean;
+  hasSnapshot: boolean;
+  taskStatus: string | undefined;
+  hasGithubPackage: boolean;
+}): PrimaryAction {
+  if (!state.hasTask) {
+    return { action: 'create-task', label: '创建任务', enabled: true };
+  }
+
+  if (!state.hasCodexPrompt) {
+    return { action: 'codex-prompt', label: '生成执行提示', enabled: true };
+  }
+
+  if (state.hasSnapshot && state.taskStatus !== 'committed') {
+    return { action: 'copy-reviewer', label: '复制给评审 AI', enabled: true };
+  }
+
+  if (state.hasCodeChanges) {
+    return { action: 'snapshot', label: '生成 snapshot', enabled: true };
+  }
+
+  if (state.hasGithubPackage) {
+    return { action: 'github-package', label: '更新 GitHub 交接包', enabled: true };
+  }
+
+  if (state.taskStatus === 'committed') {
+    return { action: 'github-package', label: '生成 GitHub 交接包', enabled: true };
+  }
+
+  return { action: 'copy-executor', label: '复制给执行 Agent', enabled: true };
 }
 
 function renderDashboardHtml(): string {
@@ -431,6 +527,13 @@ function renderDashboardHtml(): string {
         font-size: 20px;
       }
 
+      .next-location {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 800;
+      }
+
       .operation {
         margin: 22px 0;
         padding: 16px;
@@ -484,6 +587,22 @@ function renderDashboardHtml(): string {
         margin-top: 12px;
       }
 
+      .primary-strip {
+        display: grid;
+        grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
+        gap: 12px;
+        align-items: center;
+        margin-top: 14px;
+        padding-top: 14px;
+        border-top: 1px solid var(--line);
+      }
+
+      .more-actions {
+        margin-top: 14px;
+        padding-top: 14px;
+        border-top: 1px solid var(--line);
+      }
+
       button {
         min-height: 38px;
         border: 1px solid var(--line);
@@ -522,6 +641,12 @@ function renderDashboardHtml(): string {
 
       .result.ok { color: var(--accent); }
       .result.error { color: #a32d18; }
+
+      .copy-state {
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 700;
+      }
 
       .layout {
         display: grid;
@@ -616,7 +741,7 @@ function renderDashboardHtml(): string {
 
       @media (max-width: 900px) {
         main { padding: 18px; }
-        header, .layout, .form-grid { display: block; }
+        header, .layout, .form-grid, .primary-strip { display: block; }
         .status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .panel { margin-top: 14px; }
         label + label { margin-top: 10px; }
@@ -628,7 +753,7 @@ function renderDashboardHtml(): string {
       <header>
         <div>
           <h1>WebCodexBridge 任务驾驶舱</h1>
-          <p class="subtitle">ChatGPT 负责思考，Codex 负责执行，Bridge 负责状态、审计和回滚。</p>
+          <p class="subtitle">评审 AI 负责思考，执行 Agent 负责执行，Bridge 负责状态、审计和回滚。</p>
         </div>
         <div class="label">数据源：<code>/api/state</code></div>
       </header>
@@ -636,6 +761,7 @@ function renderDashboardHtml(): string {
       <section class="stage" aria-label="下一步">
         <strong id="stageLabel">loading</strong>
         <div id="stageAction">loading</div>
+        <div class="next-location">下一步位置：<span id="nextLocation">loading</span></div>
       </section>
 
       <section class="status-grid" aria-label="状态概览">
@@ -671,15 +797,22 @@ function renderDashboardHtml(): string {
             </label>
           </div>
         </form>
-        <div class="actions">
-          <button class="primary" data-action="create-task">创建任务</button>
-          <button data-action="codex-prompt">生成 Codex 提示</button>
+        <div class="primary-strip" aria-label="阶段主按钮">
+          <button class="primary" id="primaryAction" data-action="create-task">阶段主按钮</button>
+          <div class="label">阶段主按钮会随当前任务状态变化，优先做这一件事。</div>
+        </div>
+        <div class="more-actions">
+          <h2>更多操作</h2>
+          <div class="actions">
+          <button data-action="create-task">创建任务</button>
+          <button data-action="codex-prompt">生成执行提示</button>
           <button data-action="snapshot">生成 snapshot</button>
           <button data-action="commit">本地提交</button>
           <button data-action="github-package">生成 GitHub 交接包</button>
           <button data-action="github-publish">发布 PR</button>
           <button class="danger" data-action="rollback">回滚</button>
           <button data-action="refresh">刷新</button>
+          </div>
         </div>
       </section>
 
@@ -693,11 +826,12 @@ function renderDashboardHtml(): string {
         <div class="panel">
           <h2>交接内容</h2>
           <div class="tabs">
-            <button class="tab active" data-tab="codex">给 Codex</button>
-            <button class="tab" data-tab="chatgpt">给 ChatGPT</button>
+            <button class="tab active" data-tab="executor">给执行 Agent</button>
+            <button class="tab" data-tab="reviewer">给评审 AI</button>
             <button class="tab" data-tab="github">给 GitHub</button>
             <button class="tab" id="copyHandoff" type="button">复制</button>
           </div>
+          <div class="copy-state" id="copyState">复制状态：未复制</div>
           <pre id="handoffContent">loading</pre>
         </div>
       </section>
@@ -705,7 +839,7 @@ function renderDashboardHtml(): string {
 
     <script>
       let dashboardState;
-      let activeTab = 'codex';
+      let activeTab = 'executor';
 
       loadState();
 
@@ -731,9 +865,7 @@ function renderDashboardHtml(): string {
       });
 
       document.getElementById('copyHandoff').addEventListener('click', async () => {
-        const content = document.getElementById('handoffContent').textContent || '';
-        await navigator.clipboard.writeText(content);
-        setResult('已复制交接内容', 'ok');
+        await copyHandoff();
       });
 
       async function loadState() {
@@ -748,6 +880,21 @@ function renderDashboardHtml(): string {
       }
 
       async function runAction(action) {
+        if (action === 'copy-executor') {
+          activeTab = 'executor';
+          setActiveTab('executor');
+          renderHandoff();
+          await copyHandoff();
+          return;
+        }
+        if (action === 'copy-reviewer') {
+          activeTab = 'reviewer';
+          setActiveTab('reviewer');
+          renderHandoff();
+          await copyHandoff();
+          return;
+        }
+
         if (action === 'rollback' && !confirm('确认回滚当前任务？这会丢弃未提交代码改动。')) {
           return;
         }
@@ -798,6 +945,7 @@ function renderDashboardHtml(): string {
       function render(state) {
         document.getElementById('stageLabel').textContent = state.stage.label;
         document.getElementById('stageAction').textContent = state.stage.nextAction;
+        document.getElementById('nextLocation').textContent = state.stage.nextLocation;
         document.getElementById('branch').textContent = state.status.branch || 'unknown';
         const dirty = document.getElementById('dirty');
         dirty.textContent = state.workspace.label;
@@ -813,7 +961,15 @@ function renderDashboardHtml(): string {
           '</div>'
         )).join('');
         updateActionAvailability(state);
+        renderPrimaryAction(state.primaryAction);
         renderHandoff();
+      }
+
+      function renderPrimaryAction(primaryAction) {
+        const button = document.getElementById('primaryAction');
+        button.dataset.action = primaryAction.action;
+        button.textContent = primaryAction.label;
+        button.disabled = !primaryAction.enabled;
       }
 
       function updateActionAvailability(state) {
@@ -830,8 +986,11 @@ function renderDashboardHtml(): string {
       }
 
       function setActionDisabled(action, disabled) {
-        const button = document.querySelector('[data-action="' + action + '"]');
-        if (button) button.disabled = disabled;
+        document.querySelectorAll('[data-action="' + action + '"]').forEach((button) => {
+          if (button.id !== 'primaryAction') {
+            button.disabled = disabled;
+          }
+        });
       }
 
       function setBusy(isBusy) {
@@ -855,11 +1014,28 @@ function renderDashboardHtml(): string {
         if (!dashboardState) return;
         const handoff = dashboardState.handoffs[activeTab];
         const fallback = {
-          codex: dashboardState.commands.codexPrompt,
-          chatgpt: '先运行 ' + dashboardState.commands.snapshot,
+          executor: dashboardState.commands.codexPrompt,
+          reviewer: '先运行 ' + dashboardState.commands.snapshot,
           github: dashboardState.commands.githubPackage
         };
         document.getElementById('handoffContent').textContent = handoff ? handoff.content : fallback[activeTab];
+      }
+
+      async function copyHandoff() {
+        const content = document.getElementById('handoffContent').textContent || '';
+        await navigator.clipboard.writeText(content);
+        document.getElementById('copyState').textContent = '复制状态：已复制 ' + tabLabel(activeTab);
+        setResult('已复制交接内容', 'ok');
+      }
+
+      function setActiveTab(tabName) {
+        document.querySelectorAll('.tab[data-tab]').forEach((tab) => {
+          tab.classList.toggle('active', tab.dataset.tab === tabName);
+        });
+      }
+
+      function tabLabel(tabName) {
+        return tabName === 'executor' ? '给执行 Agent' : tabName === 'reviewer' ? '给评审 AI' : '给 GitHub';
       }
 
       function stateLabel(state) {

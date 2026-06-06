@@ -24,7 +24,7 @@ describe('createGithubPackage', () => {
     const task = await createTask({
       cwd: repo,
       title: '生成 GitHub 交接包',
-      description: '让 ChatGPT 能读取 PR 和 snapshot。',
+      description: '让评审 AI 能读取 PR 和 snapshot。',
       checkout: true
     });
     await writeFile(path.join(repo, 'README.md'), '# Test Repo\n\nPackage change.\n');
@@ -46,7 +46,8 @@ describe('createGithubPackage', () => {
     expect(markdown).toContain(`PR Body 文件：${snapshot.path}`);
     expect(markdown).toContain(`git push -u origin ${task.branchName}`);
     expect(markdown).toContain(`gh pr create --base main --head ${task.branchName} --title "生成 GitHub 交接包" --body-file "${snapshot.path}"`);
-    expect(markdown).toContain('请读取这个 PR，帮我评审这次 Codex 修改是否合理');
+    expect(markdown).toContain('## 给评审 AI 的评审提示');
+    expect(markdown).toContain('请读取这个 PR，帮我评审这次执行 Agent 修改是否合理');
   });
 
   it('refuses to create a package when no snapshot exists', async () => {

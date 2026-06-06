@@ -11,14 +11,14 @@ describe('createCodexPrompt', () => {
     await Promise.all(dirs.splice(0).map(removeTempDir));
   });
 
-  it('writes a reusable Codex execution prompt for the active task', async () => {
+  it('writes a reusable execution prompt for the active task', async () => {
     const repo = await createTempGitRepo();
     dirs.push(repo);
     await initBridge({ cwd: repo });
     const task = await createTask({
       cwd: repo,
       title: '实现本地执行闭环',
-      description: '让 Codex 在任务分支上修改代码，并生成可审计结果。',
+      description: '让执行 Agent 在任务分支上修改代码，并生成可审计结果。',
       checkout: true
     });
 
@@ -33,11 +33,11 @@ describe('createCodexPrompt', () => {
     });
 
     const markdown = await readFile(result.path, 'utf8');
-    expect(markdown).toContain('# Codex 执行提示');
+    expect(markdown).toContain('# 执行 Agent 执行提示');
     expect(markdown).toContain('任务标题：实现本地执行闭环');
     expect(markdown).toContain('当前任务分支：wb/task-');
     expect(markdown).toContain(`Base Commit：${task.baseCommit}`);
-    expect(markdown).toContain('让 Codex 在任务分支上修改代码，并生成可审计结果。');
+    expect(markdown).toContain('让执行 Agent 在任务分支上修改代码，并生成可审计结果。');
     expect(markdown).toContain('npm test -- --run');
     expect(markdown).toContain('不要直接提交到 main');
     expect(markdown).toContain('完成后运行 `wcb snapshot --verify "npm test -- --run"`');

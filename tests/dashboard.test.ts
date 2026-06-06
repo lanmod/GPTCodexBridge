@@ -97,7 +97,7 @@ describe('dashboard server', () => {
         verifyCommand: 'npm test -- --run'
       });
       expect(promptResponse.ok).toBe(true);
-      expect(promptResponse.message).toBe('Codex 执行提示已生成');
+      expect(promptResponse.message).toBe('执行提示已生成');
       expect(promptResponse.state.handoffs.codex.content).toContain('网页操作任务');
 
       await writeFile(path.join(repo, 'README.md'), '# Test Repo\n\nWeb action change.\n');
@@ -119,7 +119,7 @@ describe('dashboard server', () => {
     await createTask({
       cwd: repo,
       title: 'Operate from cockpit',
-      description: 'Make the dashboard guide ChatGPT, Codex, and GitHub handoffs.',
+      description: 'Make the dashboard guide reviewer AI, executor agent, and GitHub handoffs.',
       checkout: true
     });
     const prompt = await createCodexPrompt({ cwd: repo, verifyCommand: 'npm test -- --run' });
@@ -134,8 +134,14 @@ describe('dashboard server', () => {
       const state = await response.json();
 
       expect(state.stage.id).toBe('github-ready');
-      expect(state.stage.label).toBe('可交给 GitHub / ChatGPT');
+      expect(state.stage.label).toBe('可交给 GitHub / 评审 AI');
       expect(state.stage.nextAction).toBe('复制 GitHub 交接包，或在 GitHub 环境可用后发布 PR。');
+      expect(state.stage.nextLocation).toBe('网页操作台 / GitHub');
+      expect(state.primaryAction).toEqual({
+        action: 'github-package',
+        label: '更新 GitHub 交接包',
+        enabled: true
+      });
       expect(state.workspace).toEqual({
         hasCodeChanges: false,
         label: '仅交接包未提交'
@@ -150,10 +156,78 @@ describe('dashboard server', () => {
       ]);
       expect(state.handoffs.codex.path).toBe(prompt.path);
       expect(state.handoffs.codex.content).toContain('Operate from cockpit');
+      expect(state.handoffs.executor.label).toBe('给执行 Agent');
+      expect(state.handoffs.executor.content).toContain('Operate from cockpit');
       expect(state.handoffs.chatgpt.content).toContain('cockpit ok');
+      expect(state.handoffs.reviewer.label).toBe('给评审 AI');
+      expect(state.handoffs.reviewer.content).toContain('cockpit ok');
       expect(state.handoffs.github.path).toBe(githubPackage.path);
+      expect(state.handoffs.github.label).toBe('给 GitHub');
       expect(state.handoffs.github.content).toContain('GitHub PR 交接包');
       expect(state.environment.readyForGithub).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('serves the next primary action for each cockpit stage', async () => {
+    const repo = await createTempGitRepo();
+    dirs.push(repo);
+    await initBridge({ cwd: repo });
+
+    const server = await createDashboardServer({ cwd: repo, port: 0 });
+    try {
+      const initial = await readState(server.url);
+      expect(initial.primaryAction).toEqual({
+        action: 'create-task',
+        label: '创建任务',
+        enabled: true
+      });
+      expect(initial.stage.nextLocation).toBe('网页操作台');
+
+      await postAction(server.url, 'create-task', {
+        title: '阶段主按钮',
+        description: '让页面只突出当前最重要动作。',
+        checkout: true
+      });
+      const taskCreated = await readState(server.url);
+      expect(taskCreated.primaryAction).toEqual({
+        action: 'codex-prompt',
+        label: '生成执行提示',
+        enabled: true
+      });
+      expect(taskCreated.stage.nextLocation).toBe('网页操作台');
+
+      await postAction(server.url, 'codex-prompt', {
+        verifyCommand: 'npm test -- --run'
+      });
+      const promptCreated = await readState(server.url);
+      expect(promptCreated.primaryAction).toEqual({
+        action: 'copy-executor',
+        label: '复制给执行 Agent',
+        enabled: true
+      });
+      expect(promptCreated.stage.nextLocation).toBe('执行 Agent');
+
+      await writeFile(path.join(repo, 'README.md'), '# Test Repo\n\nPrimary action change.\n');
+      const dirty = await readState(server.url);
+      expect(dirty.primaryAction).toEqual({
+        action: 'snapshot',
+        label: '生成 snapshot',
+        enabled: true
+      });
+      expect(dirty.stage.nextLocation).toBe('网页操作台');
+
+      await postAction(server.url, 'snapshot', {
+        verifyCommand: 'node -e "console.log(\'primary action ok\')"'
+      });
+      const snapshotted = await readState(server.url);
+      expect(snapshotted.primaryAction).toEqual({
+        action: 'copy-reviewer',
+        label: '复制给评审 AI',
+        enabled: true
+      });
+      expect(snapshotted.stage.nextLocation).toBe('评审 AI');
     } finally {
       await server.close();
     }
@@ -171,10 +245,14 @@ describe('dashboard server', () => {
 
       expect(html).toContain('任务驾驶舱');
       expect(html).toContain('任务流水线');
-      expect(html).toContain('给 Codex');
-      expect(html).toContain('给 ChatGPT');
+      expect(html).toContain('给执行 Agent');
+      expect(html).toContain('给评审 AI');
       expect(html).toContain('给 GitHub');
       expect(html).toContain('网页操作台');
+      expect(html).toContain('阶段主按钮');
+      expect(html).toContain('更多操作');
+      expect(html).toContain('下一步位置');
+      expect(html).toContain('id="copyState"');
       expect(html).toContain('name="title"');
       expect(html).toContain('name="description"');
       expect(html).toContain('name="verifyCommand"');
@@ -198,5 +276,10 @@ async function postAction(serverUrl: string, action: string, body: Record<string
     },
     body: JSON.stringify(body)
   });
+  return response.json();
+}
+
+async function readState(serverUrl: string) {
+  const response = await fetch(`${serverUrl}/api/state`);
   return response.json();
 }
