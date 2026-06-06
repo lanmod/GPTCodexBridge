@@ -26,12 +26,17 @@ export type BridgeTask = {
   status: TaskStatus;
   createdAt: string;
   updatedAt: string;
+  latestSnapshotPath?: string;
+  latestSnapshotDiffHash?: string;
+  commitHash?: string;
+  committedAt?: string;
 };
 
 export type CreateTaskOptions = CommandContext & {
   title: string;
   description: string;
   checkout?: boolean;
+  allowDirty?: boolean;
 };
 
 export type BridgeStatus = {
@@ -49,6 +54,7 @@ export type SnapshotOptions = CommandContext & {
 export type SnapshotResult = {
   taskId: string;
   path: string;
+  diffHash: string;
 };
 
 export type CommitResult = {
