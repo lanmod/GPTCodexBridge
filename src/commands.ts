@@ -1,12 +1,13 @@
+import { createHash } from 'node:crypto';
 import { cp, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   commit,
   createAndCheckoutBranch,
+  getCodeDiffAgainstHead,
+  getCodeDiffStatAgainstHead,
   getCurrentBranch,
-  getDiff,
-  getDiffStat,
   getHeadCommit,
   getStatusShort,
   isGitRepository,
@@ -59,6 +60,11 @@ export async function createTask(options: CreateTaskOptions): Promise<BridgeTask
     throw new Error('Tasks must be created inside a Git repository.');
   }
 
+  const statusShort = await getStatusShort(options.cwd);
+  if (hasNonBridgeDirtyChanges(statusShort) && !options.allowDirty) {
+    throw new Error('创建任务前需要先提交、stash 或清理当前代码改动。确实要带着改动创建任务时，请使用 --allow-dirty。');
+  }
+
   const config = await readConfig(options.cwd);
   const now = new Date().toISOString();
   const slug = slugify(options.title, now);
@@ -93,19 +99,19 @@ export async function getBridgeStatus(context: CommandContext): Promise<BridgeSt
     isDirty: statusShort.length > 0,
     statusShort,
     activeTask,
-    latestSnapshotPath: activeTask ? await latestSnapshotPath(context.cwd, activeTask.id) : null
+    latestSnapshotPath: activeTask ? activeTask.latestSnapshotPath ?? await latestSnapshotPath(context.cwd, activeTask.id) : null
   };
 }
 
 export async function createSnapshot(options: SnapshotOptions): Promise<SnapshotResult> {
-  const task = await readActiveTask(options.cwd);
-  if (!task) {
-    throw new Error('No active WebCodexBridge task found.');
-  }
+  const task = await requireActiveTaskOnBranch(options.cwd);
 
   const verification = options.verifyCommand
     ? await runShell(options.cwd, options.verifyCommand)
     : null;
+  const codeDiff = await getCodeDiffAgainstHead(options.cwd);
+  const codeDiffStat = await getCodeDiffStatAgainstHead(options.cwd);
+  const diffHash = hashText(codeDiff);
 
   const markdown = [
     '# WebCodexBridge Snapshot',
@@ -114,6 +120,7 @@ export async function createSnapshot(options: SnapshotOptions): Promise<Snapshot
     `Task ID: ${task.id}`,
     `Branch: ${await getCurrentBranch(options.cwd)}`,
     `Base: ${task.baseBranch} @ ${task.baseCommit}`,
+    `Diff Hash: ${diffHash}`,
     '',
     '## Task Description',
     '',
@@ -125,11 +132,11 @@ export async function createSnapshot(options: SnapshotOptions): Promise<Snapshot
     '',
     '## Git Diff Stat',
     '',
-    fence((await getDiffStat(options.cwd)) || 'no diff'),
+    fence(codeDiffStat || 'no diff'),
     '',
     '## Git Diff',
     '',
-    fence((await getDiff(options.cwd)) || 'no diff'),
+    fence(codeDiff || 'no diff'),
     '',
     '## Verification',
     '',
@@ -139,33 +146,55 @@ export async function createSnapshot(options: SnapshotOptions): Promise<Snapshot
     ''
   ].join('\n');
 
+  const snapshotPath = await writeSnapshot(options.cwd, task.id, markdown);
+  await updateTask(options.cwd, {
+    ...task,
+    latestSnapshotPath: snapshotPath,
+    latestSnapshotDiffHash: diffHash
+  });
+
   return {
     taskId: task.id,
-    path: await writeSnapshot(options.cwd, task.id, markdown)
+    path: snapshotPath,
+    diffHash
   };
 }
 
 export async function commitTask(context: CommandContext): Promise<CommitResult> {
-  const task = await requireActiveTask(context.cwd);
+  const task = await requireActiveTaskOnBranch(context.cwd);
   const statusShort = await getStatusShort(context.cwd);
   if (!statusShort) {
     throw new Error('No changes to commit.');
   }
 
-  const updatedTask = await updateTask(context.cwd, { ...task, status: 'committed' });
-  const message = `任务提交：${updatedTask.title}`;
-  await stageAll(context.cwd);
-  const commitHash = await commit(context.cwd, message);
+  await requireFreshSnapshot(context.cwd, task);
 
-  return {
-    taskId: updatedTask.id,
-    commit: commitHash,
-    message
+  const message = `任务提交：${task.title}`;
+  const committedTask: BridgeTask = {
+    ...task,
+    status: 'committed',
+    committedAt: new Date().toISOString()
   };
+
+  try {
+    await updateTask(context.cwd, committedTask);
+    await stageAll(context.cwd);
+    const commitHash = await commit(context.cwd, message);
+    await updateTask(context.cwd, { ...committedTask, commitHash });
+
+    return {
+      taskId: task.id,
+      commit: commitHash,
+      message
+    };
+  } catch (error) {
+    await writeTask(context.cwd, task);
+    throw error;
+  }
 }
 
 export async function rollbackTask(options: RollbackOptions): Promise<RollbackResult> {
-  const task = await requireActiveTask(options.cwd);
+  const task = await requireActiveTaskOnBranch(options.cwd);
   const statusShort = await getStatusShort(options.cwd);
   if (statusShort && !options.force) {
     throw new Error('Rollback refused because the working tree has uncommitted changes. Re-run with force only when you are ready to discard them.');
@@ -187,7 +216,7 @@ export async function rollbackTask(options: RollbackOptions): Promise<RollbackRe
 }
 
 export async function createCodexPrompt(options: CodexPromptOptions): Promise<CodexPromptResult> {
-  const task = await requireActiveTask(options.cwd);
+  const task = await requireActiveTaskOnBranch(options.cwd);
   const verifyCommand = options.verifyCommand ?? 'npm test -- --run';
   const promptPath = path.join(options.cwd, bridgeDirName, 'tasks', task.id, 'codex-prompt.md');
   const markdown = [
@@ -230,13 +259,13 @@ export async function createCodexPrompt(options: CodexPromptOptions): Promise<Co
 }
 
 export async function publishTaskToGithub(options: GithubPublishOptions): Promise<GithubPublishResult> {
-  const task = await requireActiveTask(options.cwd);
+  const task = await requireActiveTaskOnBranch(options.cwd);
   const statusShort = await getStatusShort(options.cwd);
   if (statusShort && !isOnlyGithubPackageDirty(statusShort, task.id)) {
     throw new Error('发布到 GitHub 前需要先提交或清理本地改动。');
   }
 
-  const snapshotPath = await latestSnapshotPath(options.cwd, task.id);
+  const snapshotPath = task.latestSnapshotPath ?? await latestSnapshotPath(options.cwd, task.id);
   if (!snapshotPath) {
     throw new Error('发布到 GitHub 前需要先生成 snapshot。');
   }
@@ -271,8 +300,8 @@ export async function publishTaskToGithub(options: GithubPublishOptions): Promis
 }
 
 export async function createGithubPackage(options: GithubPackageOptions): Promise<GithubPackageResult> {
-  const task = await requireActiveTask(options.cwd);
-  const snapshotPath = await latestSnapshotPath(options.cwd, task.id);
+  const task = await requireActiveTaskOnBranch(options.cwd);
+  const snapshotPath = task.latestSnapshotPath ?? await latestSnapshotPath(options.cwd, task.id);
   if (!snapshotPath) {
     throw new Error('生成 GitHub 交接包前需要先生成 snapshot。');
   }
@@ -349,12 +378,36 @@ function fence(value: string): string {
   return `\`\`\`\n${value}\n\`\`\``;
 }
 
+function hashText(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
 async function requireActiveTask(cwd: string): Promise<BridgeTask> {
   const task = await readActiveTask(cwd);
   if (!task) {
     throw new Error('No active WebCodexBridge task found.');
   }
   return task;
+}
+
+async function requireActiveTaskOnBranch(cwd: string): Promise<BridgeTask> {
+  const task = await requireActiveTask(cwd);
+  const currentBranch = await getCurrentBranch(cwd);
+  if (currentBranch !== task.branchName) {
+    throw new Error(`当前分支是 ${currentBranch || 'detached HEAD'}，但 active task 要求在 ${task.branchName} 上操作。请先切换到任务分支。`);
+  }
+  return task;
+}
+
+async function requireFreshSnapshot(cwd: string, task: BridgeTask): Promise<void> {
+  if (!task.latestSnapshotPath || !task.latestSnapshotDiffHash) {
+    throw new Error('提交前需要先生成包含 Diff Hash 的最新 snapshot。');
+  }
+
+  const currentDiffHash = hashText(await getCodeDiffAgainstHead(cwd));
+  if (currentDiffHash !== task.latestSnapshotDiffHash) {
+    throw new Error('当前代码改动已经不同于最新 snapshot，请重新生成 snapshot 后再提交。');
+  }
 }
 
 async function backupBridgeMetadata(cwd: string): Promise<{ tempDir: string; bridgeBackupDir: string }> {
@@ -391,4 +444,11 @@ function isOnlyGithubPackageDirty(statusShort: string, taskId: string): boolean 
     .split('\n')
     .filter(Boolean)
     .every((line) => line.slice(3) === allowedPath);
+}
+
+function hasNonBridgeDirtyChanges(statusShort: string): boolean {
+  return statusShort
+    .split('\n')
+    .filter(Boolean)
+    .some((line) => !line.slice(3).startsWith('.webcodexbridge/'));
 }
