@@ -52,6 +52,8 @@ export async function initBridge(context: CommandContext): Promise<InitResult> {
     throw new Error('WebCodexBridge must be initialized inside a Git repository.');
   }
 
+  await checkNotToolRepository(context.cwd, context);
+
   return writeDefaultConfig(context.cwd);
 }
 
@@ -444,7 +446,10 @@ async function checkNotToolRepository(cwd: string, options: { internalDogfood?: 
   try {
     const content = await readFile(packageJsonPath, 'utf8');
     const pkg = JSON.parse(content);
-    if (pkg.name === 'webcodexbridge' || pkg.name === 'gptcodexbridge') {
+    const name = String(pkg.name || '');
+    const isWcbName = name.includes('webcodexbridge') || name.includes('gptcodexbridge');
+    const hasWcbBin = pkg.bin && typeof pkg.bin === 'object' && 'wcb' in pkg.bin;
+    if (isWcbName && hasWcbBin) {
       throw new Error(
         '当前目录为 WebCodexBridge 工具源码仓库本身。\n' +
         '不建议在工具源码仓库内直接创建或操作业务项目任务。\n' +

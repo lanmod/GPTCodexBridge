@@ -423,6 +423,40 @@ describe('dashboard server', () => {
       await server.close();
     }
   });
+
+  it('runs task actions from dashboard in WCB tool repo when internalDogfood is true', async () => {
+    const repo = await createTempGitRepo();
+    dirs.push(repo);
+
+    // Mock package.json designating this as the tool repository
+    await writeFile(
+      path.join(repo, 'package.json'),
+      JSON.stringify({
+        name: 'webcodexbridge',
+        bin: { wcb: './dist/cli.js' }
+      }),
+      'utf8'
+    );
+    execFileSync('git', ['add', 'package.json'], { cwd: repo });
+    execFileSync('git', ['commit', '-m', 'add package.json'], { cwd: repo });
+
+    await initBridge({ cwd: repo, internalDogfood: true });
+
+    // Start dashboard server with internalDogfood: true
+    const server = await createDashboardServer({ cwd: repo, port: 0, internalDogfood: true });
+    try {
+      const response = await postAction(server.url, 'create-task', {
+        title: '网页操作任务(dogfood)',
+        description: '从浏览器驾驶舱创建任务。',
+        checkout: true
+      });
+      expect(response.ok).toBe(true);
+      expect(response.message).toBe('任务已创建');
+      expect(response.state.status.activeTask.title).toBe('网页操作任务(dogfood)');
+    } finally {
+      await server.close();
+    }
+  });
 });
 
 async function postAction(serverUrl: string, action: string, body: Record<string, unknown>) {

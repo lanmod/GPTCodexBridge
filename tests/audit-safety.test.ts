@@ -71,7 +71,7 @@ describe('audit safety', () => {
     await initBridge({ cwd: repo });
 
     // Mock package.json designating this as the tool repository
-    await writeFile(path.join(repo, 'package.json'), JSON.stringify({ name: 'webcodexbridge' }), 'utf8');
+    await writeFile(path.join(repo, 'package.json'), JSON.stringify({ name: 'webcodexbridge', bin: { wcb: './dist/cli.js' } }), 'utf8');
     execFileSync('git', ['add', 'package.json'], { cwd: repo });
     execFileSync('git', ['commit', '-m', 'add package.json'], { cwd: repo });
 

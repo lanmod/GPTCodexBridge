@@ -32,7 +32,7 @@ async function main(): Promise<void> {
   const [command] = process.argv.slice(2);
 
   if (command === 'init') {
-    const result = await initBridge({ cwd });
+    const result = await initBridge({ cwd, internalDogfood });
     console.log(`Initialized WebCodexBridge at ${result.configPath}`);
     return;
   }
@@ -53,6 +53,7 @@ async function main(): Promise<void> {
       title: readFlag('--title'),
       description: readFlag('--description'),
       checkout: process.argv.includes('--checkout'),
+      allowDirty: process.argv.includes('--allow-dirty'),
       internalDogfood
     });
     console.log(`Created task ${task.id}`);
@@ -111,7 +112,8 @@ async function main(): Promise<void> {
     const server = await createDashboardServer({
       cwd,
       port: Number(optionalFlag('--port') ?? '8787'),
-      token
+      token,
+      internalDogfood
     });
     console.log(`WebCodexBridge 本地控制台: ${server.url}/?token=${token}`);
     console.log('按 Ctrl+C 停止服务。');
@@ -138,7 +140,29 @@ async function main(): Promise<void> {
     return;
   }
 
-  console.error('Usage: wcb doctor | wcb init | wcb task create --title "..." --description "..." [--checkout] | wcb codex prompt [--verify "..."] | wcb status | wcb snapshot [--verify "..."] | wcb commit | wcb rollback [--force] | wcb serve [--port 8787] | wcb github package [--base main] | wcb github publish [--base main]');
+  console.error(`Usage: wcb [global options] <command> [options]
+
+Global Options:
+  --project <path>          指定被管理的目标项目目录
+  --internal-dogfood        允许在 WebCodexBridge 工具仓库内开发工具自身
+
+Commands:
+  doctor
+  init
+  task create --title "..." --description "..." [--checkout] [--allow-dirty]
+  codex prompt [--verify "..."]
+  status
+  snapshot [--verify "..."]
+  commit
+  rollback [--force]
+  serve [--port 8787]
+  github package [--base <branch>]
+  github publish [--base <branch>]
+
+Examples:
+  wcb --project ~/AIWorkspaces/my-project init
+  wcb --project ~/AIWorkspaces/my-project serve
+  wcb --internal-dogfood task create --title "test" --description "test"`);
   process.exitCode = 1;
 }
 

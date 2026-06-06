@@ -20,6 +20,7 @@ export type DashboardServerOptions = {
   port: number;
   host?: string;
   token?: string;
+  internalDogfood?: boolean;
 };
 
 export type DashboardServer = {
@@ -75,7 +76,7 @@ export async function createDashboardServer(options: DashboardServerOptions): Pr
 
       if (request.method === 'POST' && pathname.startsWith('/api/actions/')) {
         const action = pathname.slice('/api/actions/'.length);
-        const result = await runDashboardAction(options.cwd, action, await readJsonBody(request));
+        const result = await runDashboardAction(options.cwd, action, await readJsonBody(request), options.internalDogfood);
         response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
         response.end(JSON.stringify(result, null, 2));
         return;
@@ -98,7 +99,12 @@ export async function createDashboardServer(options: DashboardServerOptions): Pr
   };
 }
 
-async function runDashboardAction(cwd: string, action: string, body: Record<string, unknown>) {
+async function runDashboardAction(
+  cwd: string,
+  action: string,
+  body: Record<string, unknown>,
+  internalDogfood?: boolean
+) {
   let message: string;
 
   if (action === 'create-task') {
@@ -106,34 +112,39 @@ async function runDashboardAction(cwd: string, action: string, body: Record<stri
       cwd,
       title: requiredString(body.title, '任务标题不能为空'),
       description: requiredString(body.description, '任务说明不能为空'),
-      checkout: body.checkout !== false
+      checkout: body.checkout !== false,
+      internalDogfood
     });
     message = '任务已创建';
   } else if (action === 'codex-prompt') {
     await createCodexPrompt({
       cwd,
-      verifyCommand: optionalString(body.verifyCommand)
+      verifyCommand: optionalString(body.verifyCommand),
+      internalDogfood
     });
     message = '执行提示已生成';
   } else if (action === 'snapshot') {
     await createSnapshot({
       cwd,
-      verifyCommand: optionalString(body.verifyCommand)
+      verifyCommand: optionalString(body.verifyCommand),
+      internalDogfood
     });
     message = 'Snapshot 已生成';
   } else if (action === 'commit') {
-    await commitTask({ cwd });
+    await commitTask({ cwd, internalDogfood });
     message = '本地提交已完成';
   } else if (action === 'rollback') {
     await rollbackTask({
       cwd,
-      force: body.force === true
+      force: body.force === true,
+      internalDogfood
     });
     message = '任务已回滚';
   } else if (action === 'github-package') {
     await createGithubPackage({
       cwd,
-      base: optionalString(body.base)
+      base: optionalString(body.base),
+      internalDogfood
     });
     message = 'GitHub 交接包已生成';
   } else if (action === 'github-set-remote') {
@@ -151,7 +162,8 @@ async function runDashboardAction(cwd: string, action: string, body: Record<stri
   } else if (action === 'github-publish') {
     await publishTaskToGithub({
       cwd,
-      base: optionalString(body.base)
+      base: optionalString(body.base),
+      internalDogfood
     });
     message = 'GitHub PR 已发布';
   } else {
