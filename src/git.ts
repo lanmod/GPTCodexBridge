@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
+const codeDiffPathspec = ['--', '.', ':!.webcodexbridge/**'];
 
 export async function runGit(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync('git', args, { cwd });
@@ -45,6 +46,14 @@ export async function getDiffStat(cwd: string): Promise<string> {
 
 export async function getDiff(cwd: string): Promise<string> {
   return runGit(cwd, ['diff']);
+}
+
+export async function getCodeDiffStatAgainstHead(cwd: string): Promise<string> {
+  return runGit(cwd, ['diff', '--stat', 'HEAD', ...codeDiffPathspec]);
+}
+
+export async function getCodeDiffAgainstHead(cwd: string): Promise<string> {
+  return runGit(cwd, ['diff', 'HEAD', ...codeDiffPathspec]);
 }
 
 export async function stageAll(cwd: string): Promise<void> {
