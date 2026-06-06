@@ -77,6 +77,41 @@ describe('dashboard server', () => {
     }
   });
 
+  it('runs task handoff actions from the dashboard API', async () => {
+    const repo = await createTempGitRepo();
+    dirs.push(repo);
+    await initBridge({ cwd: repo });
+
+    const server = await createDashboardServer({ cwd: repo, port: 0 });
+    try {
+      const taskResponse = await postAction(server.url, 'create-task', {
+        title: '网页操作任务',
+        description: '从浏览器驾驶舱创建任务。',
+        checkout: true
+      });
+      expect(taskResponse.ok).toBe(true);
+      expect(taskResponse.message).toBe('任务已创建');
+      expect(taskResponse.state.status.activeTask.title).toBe('网页操作任务');
+
+      const promptResponse = await postAction(server.url, 'codex-prompt', {
+        verifyCommand: 'npm test -- --run'
+      });
+      expect(promptResponse.ok).toBe(true);
+      expect(promptResponse.message).toBe('Codex 执行提示已生成');
+      expect(promptResponse.state.handoffs.codex.content).toContain('网页操作任务');
+
+      await writeFile(path.join(repo, 'README.md'), '# Test Repo\n\nWeb action change.\n');
+      const snapshotResponse = await postAction(server.url, 'snapshot', {
+        verifyCommand: 'node -e "console.log(\'web action ok\')"'
+      });
+      expect(snapshotResponse.ok).toBe(true);
+      expect(snapshotResponse.message).toBe('Snapshot 已生成');
+      expect(snapshotResponse.state.latestSnapshot.content).toContain('web action ok');
+    } finally {
+      await server.close();
+    }
+  });
+
   it('serves cockpit state with pipeline and handoff content', async () => {
     const repo = await createTempGitRepo();
     dirs.push(repo);
@@ -139,8 +174,29 @@ describe('dashboard server', () => {
       expect(html).toContain('给 Codex');
       expect(html).toContain('给 ChatGPT');
       expect(html).toContain('给 GitHub');
+      expect(html).toContain('网页操作台');
+      expect(html).toContain('name="title"');
+      expect(html).toContain('name="description"');
+      expect(html).toContain('name="verifyCommand"');
+      expect(html).toContain('data-action="create-task"');
+      expect(html).toContain('data-action="codex-prompt"');
+      expect(html).toContain('data-action="snapshot"');
+      expect(html).toContain('data-action="commit"');
+      expect(html).toContain('data-action="rollback"');
+      expect(html).toContain('data-action="github-package"');
     } finally {
       await server.close();
     }
   });
 });
+
+async function postAction(serverUrl: string, action: string, body: Record<string, unknown>) {
+  const response = await fetch(`${serverUrl}/api/actions/${action}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify(body)
+  });
+  return response.json();
+}

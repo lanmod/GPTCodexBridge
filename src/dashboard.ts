@@ -1,8 +1,18 @@
-import { createServer, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
-import { checkBridgeEnvironment, getBridgeStatus } from './commands.js';
+import {
+  checkBridgeEnvironment,
+  commitTask,
+  createCodexPrompt,
+  createGithubPackage,
+  createSnapshot,
+  createTask,
+  getBridgeStatus,
+  publishTaskToGithub,
+  rollbackTask
+} from './commands.js';
 import { getDiffStat } from './git.js';
 
 export type DashboardServerOptions = {
@@ -44,6 +54,14 @@ export async function createDashboardServer(options: DashboardServerOptions): Pr
         return;
       }
 
+      if (request.method === 'POST' && request.url?.startsWith('/api/actions/')) {
+        const action = request.url.slice('/api/actions/'.length);
+        const result = await runDashboardAction(options.cwd, action, await readJsonBody(request));
+        response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+        response.end(JSON.stringify(result, null, 2));
+        return;
+      }
+
       response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
       response.end('Not found');
     } catch (error) {
@@ -59,6 +77,98 @@ export async function createDashboardServer(options: DashboardServerOptions): Pr
     url: `http://${host}:${address.port}`,
     close: () => close(server)
   };
+}
+
+async function runDashboardAction(cwd: string, action: string, body: Record<string, unknown>) {
+  let message: string;
+
+  if (action === 'create-task') {
+    await createTask({
+      cwd,
+      title: requiredString(body.title, '任务标题不能为空'),
+      description: requiredString(body.description, '任务说明不能为空'),
+      checkout: body.checkout !== false
+    });
+    message = '任务已创建';
+  } else if (action === 'codex-prompt') {
+    await createCodexPrompt({
+      cwd,
+      verifyCommand: optionalString(body.verifyCommand)
+    });
+    message = 'Codex 执行提示已生成';
+  } else if (action === 'snapshot') {
+    await createSnapshot({
+      cwd,
+      verifyCommand: optionalString(body.verifyCommand)
+    });
+    message = 'Snapshot 已生成';
+  } else if (action === 'commit') {
+    await commitTask({ cwd });
+    message = '本地提交已完成';
+  } else if (action === 'rollback') {
+    await rollbackTask({
+      cwd,
+      force: body.force === true
+    });
+    message = '任务已回滚';
+  } else if (action === 'github-package') {
+    await createGithubPackage({
+      cwd,
+      base: optionalString(body.base)
+    });
+    message = 'GitHub 交接包已生成';
+  } else if (action === 'github-publish') {
+    await publishTaskToGithub({
+      cwd,
+      base: optionalString(body.base)
+    });
+    message = 'GitHub PR 已发布';
+  } else {
+    throw new Error(`未知操作：${action}`);
+  }
+
+  return {
+    ok: true,
+    message,
+    state: await readDashboardState(cwd)
+  };
+}
+
+function requiredString(value: unknown, message: string): string {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(message);
+  }
+  return value.trim();
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    request.setEncoding('utf8');
+    request.on('data', (chunk: string) => {
+      body += chunk;
+      if (body.length > 1_000_000) {
+        request.destroy(new Error('请求体过大'));
+      }
+    });
+    request.on('error', reject);
+    request.on('end', () => {
+      if (!body.trim()) {
+        resolve({});
+        return;
+      }
+      try {
+        const parsed = JSON.parse(body);
+        resolve(parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {});
+      } catch {
+        reject(new Error('请求 JSON 格式不正确'));
+      }
+    });
+  });
 }
 
 async function readDashboardState(cwd: string) {
@@ -321,6 +431,98 @@ function renderDashboardHtml(): string {
         font-size: 20px;
       }
 
+      .operation {
+        margin: 22px 0;
+        padding: 16px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+      }
+
+      .operation-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+
+      .form-grid {
+        display: grid;
+        grid-template-columns: minmax(220px, 0.8fr) minmax(260px, 1.2fr);
+        gap: 10px;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      input, textarea {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #fbfcfa;
+        color: var(--ink);
+        font: inherit;
+        font-size: 14px;
+        padding: 10px;
+      }
+
+      textarea {
+        min-height: 74px;
+        resize: vertical;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      button {
+        min-height: 38px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #f8faf6;
+        color: var(--ink);
+        padding: 8px 11px;
+        font: inherit;
+        font-weight: 800;
+        cursor: pointer;
+      }
+
+      button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+
+      button.danger {
+        background: #fff7f0;
+        border-color: #dfb38d;
+        color: #8b3d10;
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.5;
+      }
+
+      .result {
+        min-height: 20px;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .result.ok { color: var(--accent); }
+      .result.error { color: #a32d18; }
+
       .layout {
         display: grid;
         grid-template-columns: minmax(0, 0.9fr) minmax(360px, 1.1fr);
@@ -414,9 +616,10 @@ function renderDashboardHtml(): string {
 
       @media (max-width: 900px) {
         main { padding: 18px; }
-        header, .layout { display: block; }
+        header, .layout, .form-grid { display: block; }
         .status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .panel { margin-top: 14px; }
+        label + label { margin-top: 10px; }
       }
     </style>
   </head>
@@ -443,6 +646,43 @@ function renderDashboardHtml(): string {
         <div class="metric"><div class="label">最新快照</div><div class="value" id="snapshot">loading</div></div>
       </section>
 
+      <section class="operation" aria-label="网页操作台">
+        <div class="operation-head">
+          <h2>网页操作台</h2>
+          <div class="result" id="actionResult">准备就绪</div>
+        </div>
+        <form id="actionForm">
+          <div class="form-grid">
+            <label>
+              任务标题
+              <input name="title" autocomplete="off" placeholder="例如：完善操作说明">
+            </label>
+            <label>
+              任务说明
+              <textarea name="description" placeholder="写清楚目标、边界和验收方式"></textarea>
+            </label>
+            <label>
+              验证命令
+              <input name="verifyCommand" value="npm test -- --run">
+            </label>
+            <label>
+              GitHub 目标分支
+              <input name="base" value="main">
+            </label>
+          </div>
+        </form>
+        <div class="actions">
+          <button class="primary" data-action="create-task">创建任务</button>
+          <button data-action="codex-prompt">生成 Codex 提示</button>
+          <button data-action="snapshot">生成 snapshot</button>
+          <button data-action="commit">本地提交</button>
+          <button data-action="github-package">生成 GitHub 交接包</button>
+          <button data-action="github-publish">发布 PR</button>
+          <button class="danger" data-action="rollback">回滚</button>
+          <button data-action="refresh">刷新</button>
+        </div>
+      </section>
+
       <section class="layout">
         <div class="panel">
           <h2>任务流水线</h2>
@@ -456,6 +696,7 @@ function renderDashboardHtml(): string {
             <button class="tab active" data-tab="codex">给 Codex</button>
             <button class="tab" data-tab="chatgpt">给 ChatGPT</button>
             <button class="tab" data-tab="github">给 GitHub</button>
+            <button class="tab" id="copyHandoff" type="button">复制</button>
           </div>
           <pre id="handoffContent">loading</pre>
         </div>
@@ -466,24 +707,93 @@ function renderDashboardHtml(): string {
       let dashboardState;
       let activeTab = 'codex';
 
-      fetch('/api/state')
-        .then((response) => response.json())
-        .then((state) => {
-          dashboardState = state;
-          render(state);
-        })
-        .catch((error) => {
-          document.getElementById('handoffContent').textContent = error.message;
-        });
+      loadState();
 
       document.querySelectorAll('.tab').forEach((button) => {
         button.addEventListener('click', () => {
+          if (!button.dataset.tab) return;
           activeTab = button.dataset.tab;
-          document.querySelectorAll('.tab').forEach((tab) => tab.classList.remove('active'));
+          document.querySelectorAll('.tab[data-tab]').forEach((tab) => tab.classList.remove('active'));
           button.classList.add('active');
           renderHandoff();
         });
       });
+
+      document.querySelectorAll('[data-action]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const action = button.dataset.action;
+          if (action === 'refresh') {
+            loadState();
+            return;
+          }
+          runAction(action);
+        });
+      });
+
+      document.getElementById('copyHandoff').addEventListener('click', async () => {
+        const content = document.getElementById('handoffContent').textContent || '';
+        await navigator.clipboard.writeText(content);
+        setResult('已复制交接内容', 'ok');
+      });
+
+      async function loadState() {
+        try {
+          const response = await fetch('/api/state');
+          dashboardState = await response.json();
+          render(dashboardState);
+        } catch (error) {
+          document.getElementById('handoffContent').textContent = error.message;
+          setResult(error.message, 'error');
+        }
+      }
+
+      async function runAction(action) {
+        if (action === 'rollback' && !confirm('确认回滚当前任务？这会丢弃未提交代码改动。')) {
+          return;
+        }
+
+        setBusy(true);
+        setResult('执行中...', '');
+        try {
+          const response = await fetch('/api/actions/' + action, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(actionBody(action))
+          });
+          const result = await response.json();
+          if (!response.ok || result.error) {
+            throw new Error(result.error || '操作失败');
+          }
+          dashboardState = result.state;
+          render(dashboardState);
+          setResult(result.message, 'ok');
+        } catch (error) {
+          setResult(error.message, 'error');
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      function actionBody(action) {
+        const form = new FormData(document.getElementById('actionForm'));
+        if (action === 'create-task') {
+          return {
+            title: form.get('title'),
+            description: form.get('description'),
+            checkout: true
+          };
+        }
+        if (action === 'codex-prompt' || action === 'snapshot') {
+          return { verifyCommand: form.get('verifyCommand') };
+        }
+        if (action === 'github-package' || action === 'github-publish') {
+          return { base: form.get('base') };
+        }
+        if (action === 'rollback') {
+          return { force: true };
+        }
+        return {};
+      }
 
       function render(state) {
         document.getElementById('stageLabel').textContent = state.stage.label;
@@ -502,7 +812,43 @@ function renderDashboardHtml(): string {
             '<div><strong>' + escapeHtml(step.label) + '</strong><div class="label">' + escapeHtml(step.detail) + '</div></div>' +
           '</div>'
         )).join('');
+        updateActionAvailability(state);
         renderHandoff();
+      }
+
+      function updateActionAvailability(state) {
+        const hasTask = Boolean(state.status.activeTask);
+        const hasSnapshot = Boolean(state.latestSnapshot);
+        const hasGithubPackage = Boolean(state.handoffs.github);
+        setActionDisabled('create-task', hasTask);
+        setActionDisabled('codex-prompt', !hasTask);
+        setActionDisabled('snapshot', !hasTask);
+        setActionDisabled('commit', !hasTask || !hasSnapshot);
+        setActionDisabled('github-package', !hasTask || !hasSnapshot);
+        setActionDisabled('github-publish', !hasTask || !hasSnapshot || !state.environment.readyForGithub);
+        setActionDisabled('rollback', !hasTask);
+      }
+
+      function setActionDisabled(action, disabled) {
+        const button = document.querySelector('[data-action="' + action + '"]');
+        if (button) button.disabled = disabled;
+      }
+
+      function setBusy(isBusy) {
+        document.querySelectorAll('[data-action]').forEach((button) => {
+          if (isBusy) {
+            button.dataset.wasDisabled = String(button.disabled);
+            button.disabled = true;
+          } else {
+            button.disabled = button.dataset.wasDisabled === 'true';
+          }
+        });
+      }
+
+      function setResult(message, kind) {
+        const result = document.getElementById('actionResult');
+        result.textContent = message;
+        result.className = kind ? 'result ' + kind : 'result';
       }
 
       function renderHandoff() {

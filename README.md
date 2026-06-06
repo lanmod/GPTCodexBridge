@@ -36,7 +36,7 @@ wcb github publish --base main
 - Git：作为本地审计账本和回滚锚点。
 - GitHub：作为 ChatGPT 和本地执行结果之间的共享状态层。
 
-浏览器任务驾驶舱复用同一套命令能力，展示任务流水线、当前阶段、下一步建议，以及给 Codex / ChatGPT / GitHub 的交接内容。
+浏览器任务驾驶舱复用同一套命令能力，展示任务流水线、当前阶段、下一步建议，并提供网页操作台来创建任务、生成 Codex 提示、生成 snapshot、本地提交、回滚，以及生成 GitHub 交接包 / 发布 PR。
 
 详细日常流程见：[docs/操作说明.md](docs/操作说明.md)。
 
