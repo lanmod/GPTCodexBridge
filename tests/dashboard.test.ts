@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { writeFile } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   commitTask,
@@ -72,6 +74,75 @@ describe('dashboard server', () => {
       expect(state.commands.snapshot).toBe('wcb snapshot --verify "npm test -- --run"');
       expect(state.commands.githubPackage).toBe('wcb github package --base main');
       expect(state.commands.githubPublish).toBe('wcb github publish --base main');
+      expect(state.githubPublishing.remoteUrl).toBe(null);
+      expect(state.githubPublishing.baseBranch).toBe('main');
+      expect(state.githubPublishing.headBranch).toBe(task.branchName);
+      expect(state.githubPublishing.prUrl).toBe(null);
+      expect(state.githubPublishing.guidance).toContain('先在 GitHub 创建仓库');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('sets a GitHub remote and pushes base and task branches from the dashboard API', async () => {
+    const repo = await createTempGitRepo();
+    dirs.push(repo);
+    const remote = await mkdtemp(path.join(tmpdir(), 'wcb-remote-'));
+    dirs.push(remote);
+    execFileSync('git', ['init', '--bare'], { cwd: remote });
+    await initBridge({ cwd: repo });
+    const task = await createTask({
+      cwd: repo,
+      title: '网页发布到 GitHub',
+      description: '从网页设置 remote 并推送分支。',
+      checkout: true
+    });
+    await writeFile(path.join(repo, 'README.md'), '# Test Repo\n\nPublish from dashboard.\n');
+    await createSnapshot({ cwd: repo, verifyCommand: 'node -e "console.log(\'publish ok\')"' });
+    await commitTask({ cwd: repo });
+
+    const server = await createDashboardServer({ cwd: repo, port: 0 });
+    try {
+      const remoteResponse = await postAction(server.url, 'github-set-remote', {
+        remoteUrl: remote
+      });
+      expect(remoteResponse.ok).toBe(true);
+      expect(remoteResponse.message).toBe('GitHub remote 已设置');
+      expect(remoteResponse.state.githubPublishing.remoteUrl).toBe(remote);
+
+      const pushResponse = await postAction(server.url, 'github-push-branches', {
+        base: 'main'
+      });
+      expect(pushResponse.ok).toBe(true);
+      expect(pushResponse.message).toBe('GitHub 分支已推送');
+      expect(pushResponse.state.githubPublishing.headBranch).toBe(task.branchName);
+
+      expect(execFileSync('git', ['rev-parse', 'main'], { cwd: remote, encoding: 'utf8' }).trim()).toBeTruthy();
+      expect(execFileSync('git', ['rev-parse', task.branchName], { cwd: remote, encoding: 'utf8' }).trim()).toBeTruthy();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('builds a browser PR link for GitHub remotes', async () => {
+    const repo = await createTempGitRepo();
+    dirs.push(repo);
+    await initBridge({ cwd: repo });
+    const task = await createTask({
+      cwd: repo,
+      title: '网页 PR 链接',
+      description: '让用户从浏览器打开 GitHub PR 创建页。',
+      checkout: true
+    });
+    execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/lanmod/PDF_OCR.git'], { cwd: repo });
+
+    const server = await createDashboardServer({ cwd: repo, port: 0 });
+    try {
+      const state = await readState(server.url);
+
+      expect(state.githubPublishing.remoteUrl).toBe('https://github.com/lanmod/PDF_OCR.git');
+      expect(state.githubPublishing.prUrl).toBe(`https://github.com/lanmod/PDF_OCR/compare/main...${encodeURIComponent(task.branchName)}?expand=1`);
+      expect(state.githubPublishing.guidance).toContain('如果浏览器没有登录 GitHub');
     } finally {
       await server.close();
     }
@@ -276,17 +347,22 @@ describe('dashboard server', () => {
       expect(html).toContain('网页操作台');
       expect(html).toContain('阶段主按钮');
       expect(html).toContain('更多操作');
+      expect(html).toContain('GitHub 发布');
       expect(html).toContain('下一步位置');
       expect(html).toContain('id="copyState"');
       expect(html).toContain('name="title"');
       expect(html).toContain('name="description"');
       expect(html).toContain('name="verifyCommand"');
+      expect(html).toContain('name="remoteUrl"');
+      expect(html).toContain('id="githubPrLink"');
       expect(html).toContain('data-action="create-task"');
       expect(html).toContain('data-action="codex-prompt"');
       expect(html).toContain('data-action="snapshot"');
       expect(html).toContain('data-action="commit"');
       expect(html).toContain('data-action="rollback"');
       expect(html).toContain('data-action="github-package"');
+      expect(html).toContain('data-action="github-set-remote"');
+      expect(html).toContain('data-action="github-push-branches"');
     } finally {
       await server.close();
     }

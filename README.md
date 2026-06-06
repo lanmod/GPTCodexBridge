@@ -40,6 +40,8 @@ wcb github publish --base main
 
 详细日常流程见：[docs/操作说明.md](docs/操作说明.md)。
 
+网页操作台也可以完成 GitHub 发布准备：先在 GitHub 创建仓库，然后在 `GitHub 发布` 区域填入 remote URL，点击设置 remote、推送 base 与任务分支，再打开 PR 页面。如果浏览器没有登录 GitHub，按 GitHub 页面提示登录授权；命令行发布则需要安装 GitHub CLI 并运行 `gh auth login`。
+
 ## 本地 Git 闭环
 
 1. 在评审 AI 中讨论任务。

@@ -13,7 +13,7 @@ import {
   publishTaskToGithub,
   rollbackTask
 } from './commands.js';
-import { getDiffStat } from './git.js';
+import { getDiffStat, getRemoteUrl, pushBranch, setRemoteUrl } from './git.js';
 
 export type DashboardServerOptions = {
   cwd: string;
@@ -123,6 +123,18 @@ async function runDashboardAction(cwd: string, action: string, body: Record<stri
       base: optionalString(body.base)
     });
     message = 'GitHub 交接包已生成';
+  } else if (action === 'github-set-remote') {
+    await setRemoteUrl(cwd, requiredString(body.remoteUrl, 'GitHub remote URL 不能为空'));
+    message = 'GitHub remote 已设置';
+  } else if (action === 'github-push-branches') {
+    const status = await getBridgeStatus({ cwd });
+    const task = status.activeTask;
+    if (!task) {
+      throw new Error('没有 active task，无法推送任务分支。');
+    }
+    await pushBranch(cwd, optionalString(body.base) ?? task.baseBranch);
+    await pushBranch(cwd, task.branchName);
+    message = 'GitHub 分支已推送';
   } else if (action === 'github-publish') {
     await publishTaskToGithub({
       cwd,
@@ -188,6 +200,7 @@ async function readDashboardState(cwd: string) {
       }
     : null;
   const github = task ? await readOptionalArtifact(cwd, task.id, 'github-pr-package.md') : null;
+  const githubPublishing = await readGithubPublishingState(cwd, status);
   const environment = await checkBridgeEnvironment({ cwd });
   const onlyGithubPackageDirty = task ? isOnlyGithubPackageDirty(status.statusShort, task.id) : false;
   const hasCodeChanges = hasNonBridgeDirtyChanges(status.statusShort);
@@ -237,6 +250,7 @@ async function readDashboardState(cwd: string) {
     primaryAction,
     pipeline,
     environment,
+    githubPublishing,
     diffStat: (await getDiffStat(cwd)) || 'no diff',
     latestSnapshot,
     handoffs: {
@@ -255,6 +269,41 @@ async function readDashboardState(cwd: string) {
       githubPublish: 'wcb github publish --base main'
     }
   };
+}
+
+async function readGithubPublishingState(cwd: string, status: Awaited<ReturnType<typeof getBridgeStatus>>) {
+  const task = status.activeTask;
+  const remoteUrl = await getRemoteUrl(cwd);
+  const baseBranch = task?.baseBranch ?? 'main';
+  const headBranch = task?.branchName ?? status.branch;
+  const repositoryUrl = remoteUrl ? toGithubRepositoryUrl(remoteUrl) : null;
+  const prUrl = repositoryUrl && task
+    ? `${repositoryUrl}/compare/${encodeURIComponent(baseBranch)}...${encodeURIComponent(headBranch)}?expand=1`
+    : null;
+
+  return {
+    remoteUrl,
+    baseBranch,
+    headBranch,
+    prUrl,
+    guidance: remoteUrl
+      ? '先推送 base 和任务分支，然后打开 PR 页面。如果浏览器没有登录 GitHub，请按 GitHub 页面提示登录授权。'
+      : '先在 GitHub 创建仓库，然后在这里填入 remote URL。需要命令行授权时，可安装 GitHub CLI 并运行 gh auth login。'
+  };
+}
+
+function toGithubRepositoryUrl(remoteUrl: string): string | null {
+  const httpsMatch = remoteUrl.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/);
+  if (httpsMatch) {
+    return `https://github.com/${httpsMatch[1]}/${httpsMatch[2]}`;
+  }
+
+  const sshMatch = remoteUrl.match(/^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/);
+  if (sshMatch) {
+    return `https://github.com/${sshMatch[1]}/${sshMatch[2]}`;
+  }
+
+  return null;
 }
 
 async function readOptionalArtifact(cwd: string, taskId: string, filename: string): Promise<Artifact> {
@@ -603,6 +652,59 @@ function renderDashboardHtml(): string {
         border-top: 1px solid var(--line);
       }
 
+      .github-panel {
+        margin-top: 14px;
+        padding-top: 14px;
+        border-top: 1px solid var(--line);
+      }
+
+      .github-grid {
+        display: grid;
+        grid-template-columns: minmax(240px, 1fr) minmax(240px, 1fr);
+        gap: 10px;
+      }
+
+      .github-status {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        margin: 10px 0;
+      }
+
+      .mini {
+        min-height: 62px;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #fbfcfa;
+      }
+
+      .mini strong {
+        display: block;
+        margin-top: 4px;
+        overflow-wrap: anywhere;
+        font-size: 13px;
+      }
+
+      .github-link {
+        display: inline-flex;
+        align-items: center;
+        min-height: 38px;
+        border: 1px solid var(--accent);
+        border-radius: 6px;
+        color: var(--accent);
+        padding: 8px 11px;
+        font-weight: 800;
+        text-decoration: none;
+      }
+
+      .github-link.disabled {
+        pointer-events: none;
+        border-color: var(--line);
+        color: var(--muted);
+        opacity: 0.6;
+      }
+
       button {
         min-height: 38px;
         border: 1px solid var(--line);
@@ -741,8 +843,9 @@ function renderDashboardHtml(): string {
 
       @media (max-width: 900px) {
         main { padding: 18px; }
-        header, .layout, .form-grid, .primary-strip { display: block; }
+        header, .layout, .form-grid, .primary-strip, .github-grid { display: block; }
         .status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .github-status { grid-template-columns: 1fr; }
         .panel { margin-top: 14px; }
         label + label { margin-top: 10px; }
       }
@@ -812,6 +915,28 @@ function renderDashboardHtml(): string {
           <button data-action="github-publish">发布 PR</button>
           <button class="danger" data-action="rollback">回滚</button>
           <button data-action="refresh">刷新</button>
+          </div>
+        </div>
+        <div class="github-panel" aria-label="GitHub 发布">
+          <h2>GitHub 发布</h2>
+          <div class="github-grid">
+            <label>
+              GitHub remote URL
+              <input name="remoteUrl" autocomplete="off" placeholder="https://github.com/owner/repo.git">
+            </label>
+            <div>
+              <div class="label" id="githubGuidance">loading</div>
+              <div class="actions">
+                <button data-action="github-set-remote">设置 remote</button>
+                <button data-action="github-push-branches">推送分支</button>
+                <a class="github-link disabled" id="githubPrLink" href="#" target="_blank" rel="noreferrer">打开 PR 页面</a>
+              </div>
+            </div>
+          </div>
+          <div class="github-status">
+            <div class="mini"><div class="label">Remote</div><strong id="githubRemote">loading</strong></div>
+            <div class="mini"><div class="label">Base</div><strong id="githubBase">loading</strong></div>
+            <div class="mini"><div class="label">Head</div><strong id="githubHead">loading</strong></div>
           </div>
         </div>
       </section>
@@ -933,8 +1058,11 @@ function renderDashboardHtml(): string {
         if (action === 'codex-prompt' || action === 'snapshot') {
           return { verifyCommand: form.get('verifyCommand') };
         }
-        if (action === 'github-package' || action === 'github-publish') {
+        if (action === 'github-package' || action === 'github-publish' || action === 'github-push-branches') {
           return { base: form.get('base') };
+        }
+        if (action === 'github-set-remote') {
+          return { remoteUrl: form.get('remoteUrl') };
         }
         if (action === 'rollback') {
           return { force: true };
@@ -953,6 +1081,7 @@ function renderDashboardHtml(): string {
         document.getElementById('task').textContent = state.status.activeTask ? state.status.activeTask.title : '无 active task';
         document.getElementById('snapshot').textContent = state.latestSnapshot ? state.latestSnapshot.path : '无';
         document.getElementById('githubReady').textContent = state.handoffs.github ? '交接包已就绪' : state.environment.readyForGithub ? '可发布 PR' : '先生成交接包';
+        renderGithubPublishing(state.githubPublishing);
         document.getElementById('diffStat').textContent = state.diffStat;
         document.getElementById('pipeline').innerHTML = state.pipeline.map((step) => (
           '<div class="step">' +
@@ -972,6 +1101,25 @@ function renderDashboardHtml(): string {
         button.disabled = !primaryAction.enabled;
       }
 
+      function renderGithubPublishing(githubPublishing) {
+        document.getElementById('githubRemote').textContent = githubPublishing.remoteUrl || '未设置';
+        document.getElementById('githubBase').textContent = githubPublishing.baseBranch || 'main';
+        document.getElementById('githubHead').textContent = githubPublishing.headBranch || 'unknown';
+        document.getElementById('githubGuidance').textContent = githubPublishing.guidance;
+        const remoteInput = document.querySelector('input[name="remoteUrl"]');
+        if (!remoteInput.value && githubPublishing.remoteUrl) {
+          remoteInput.value = githubPublishing.remoteUrl;
+        }
+        const link = document.getElementById('githubPrLink');
+        if (githubPublishing.prUrl) {
+          link.href = githubPublishing.prUrl;
+          link.classList.remove('disabled');
+        } else {
+          link.href = '#';
+          link.classList.add('disabled');
+        }
+      }
+
       function updateActionAvailability(state) {
         const hasTask = Boolean(state.status.activeTask);
         const hasSnapshot = Boolean(state.latestSnapshot);
@@ -982,6 +1130,8 @@ function renderDashboardHtml(): string {
         setActionDisabled('commit', !hasTask || !hasSnapshot);
         setActionDisabled('github-package', !hasTask || !hasSnapshot);
         setActionDisabled('github-publish', !hasTask || !hasSnapshot || !state.environment.readyForGithub);
+        setActionDisabled('github-set-remote', false);
+        setActionDisabled('github-push-branches', !hasTask || !state.githubPublishing.remoteUrl);
         setActionDisabled('rollback', !hasTask);
       }
 
