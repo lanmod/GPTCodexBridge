@@ -37,7 +37,8 @@ async function main(): Promise<void> {
       cwd: process.cwd(),
       title: readFlag('--title'),
       description: readFlag('--description'),
-      checkout: process.argv.includes('--checkout')
+      checkout: process.argv.includes('--checkout'),
+      allowDirty: process.argv.includes('--allow-dirty')
     });
     console.log(`Created task ${task.id}`);
     console.log(`Branch: ${task.branchName}`);
@@ -115,7 +116,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  console.error('Usage: wcb doctor | wcb init | wcb task create --title "..." --description "..." [--checkout] | wcb codex prompt [--verify "..."] | wcb status | wcb snapshot [--verify "..."] | wcb commit | wcb rollback [--force] | wcb serve [--port 8787] | wcb github package [--base main] | wcb github publish [--base main]');
+  console.error('Usage: wcb doctor | wcb init | wcb task create --title "..." --description "..." [--checkout] [--allow-dirty] | wcb codex prompt [--verify "..."] | wcb status | wcb snapshot [--verify "..."] | wcb commit | wcb rollback [--force] | wcb serve [--port 8787] | wcb github package [--base main] | wcb github publish [--base main]');
   process.exitCode = 1;
 }
 
