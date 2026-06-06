@@ -39,7 +39,7 @@ describe('commitTask and rollbackTask', () => {
       checkout: true
     });
     await writeFile(path.join(repo, 'README.md'), '# Test Repo\n\nCommitted change.\n');
-
+    await createSnapshot({ cwd: repo });
     const result = await commitTask({ cwd: repo });
 
     expect(result.commit).toMatch(/^[0-9a-f]{40}$/);
@@ -78,6 +78,7 @@ describe('commitTask and rollbackTask', () => {
       checkout: true
     });
     await writeFile(path.join(repo, 'README.md'), '# Test Repo\n\nChange to remove.\n');
+    await createSnapshot({ cwd: repo });
     await commitTask({ cwd: repo });
 
     const result = await rollbackTask({ cwd: repo, force: true });

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomBytes } from 'node:crypto';
 import {
   commitTask,
   createCodexPrompt,
@@ -88,11 +89,13 @@ async function main(): Promise<void> {
   }
 
   if (command === 'serve') {
+    const token = randomBytes(16).toString('hex');
     const server = await createDashboardServer({
       cwd: process.cwd(),
-      port: Number(optionalFlag('--port') ?? '8787')
+      port: Number(optionalFlag('--port') ?? '8787'),
+      token
     });
-    console.log(`WebCodexBridge 本地控制台: ${server.url}`);
+    console.log(`WebCodexBridge 本地控制台: ${server.url}/?token=${token}`);
     console.log('按 Ctrl+C 停止服务。');
     return;
   }

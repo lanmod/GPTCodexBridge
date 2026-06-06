@@ -19,6 +19,7 @@ export type DashboardServerOptions = {
   cwd: string;
   port: number;
   host?: string;
+  token?: string;
 };
 
 export type DashboardServer = {
@@ -48,20 +49,32 @@ export async function createDashboardServer(options: DashboardServerOptions): Pr
   const host = options.host ?? '127.0.0.1';
   const server = createServer(async (request, response) => {
     try {
-      if (request.url === '/' || request.url === '/index.html') {
+      const parsedUrl = new URL(request.url ?? '', `http://${host}`);
+      const pathname = parsedUrl.pathname;
+
+      if (options.token) {
+        const token = parsedUrl.searchParams.get('token') || request.headers['x-wcb-token'];
+        if (token !== options.token) {
+          response.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
+          response.end('Forbidden: Invalid or missing token.');
+          return;
+        }
+      }
+
+      if (pathname === '/' || pathname === '/index.html') {
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-        response.end(renderDashboardHtml());
+        response.end(renderDashboardHtml(options.token));
         return;
       }
 
-      if (request.url === '/api/state') {
+      if (pathname === '/api/state') {
         response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
         response.end(JSON.stringify(await readDashboardState(options.cwd), null, 2));
         return;
       }
 
-      if (request.method === 'POST' && request.url?.startsWith('/api/actions/')) {
-        const action = request.url.slice('/api/actions/'.length);
+      if (request.method === 'POST' && pathname.startsWith('/api/actions/')) {
+        const action = pathname.slice('/api/actions/'.length);
         const result = await runDashboardAction(options.cwd, action, await readJsonBody(request));
         response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
         response.end(JSON.stringify(result, null, 2));
@@ -474,7 +487,7 @@ function buildPrimaryAction(state: {
   return { action: 'copy-executor', label: '复制给执行 Agent', enabled: true };
 }
 
-function renderDashboardHtml(): string {
+function renderDashboardHtml(token?: string): string {
   return `<!doctype html>
 <html lang="zh-CN">
   <head>
@@ -963,6 +976,7 @@ function renderDashboardHtml(): string {
     </main>
 
     <script>
+      const securityToken = ${JSON.stringify(token || '')};
       let dashboardState;
       let activeTab = 'executor';
 
@@ -995,7 +1009,9 @@ function renderDashboardHtml(): string {
 
       async function loadState() {
         try {
-          const response = await fetch('/api/state');
+          const response = await fetch('/api/state', {
+            headers: { 'X-WCB-Token': securityToken }
+          });
           dashboardState = await response.json();
           render(dashboardState);
         } catch (error) {
@@ -1029,7 +1045,10 @@ function renderDashboardHtml(): string {
         try {
           const response = await fetch('/api/actions/' + action, {
             method: 'POST',
-            headers: { 'content-type': 'application/json' },
+            headers: {
+              'content-type': 'application/json',
+              'X-WCB-Token': securityToken
+            },
             body: JSON.stringify(actionBody(action))
           });
           const result = await response.json();

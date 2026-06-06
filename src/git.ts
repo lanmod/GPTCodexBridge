@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
+const codeDiffPathspec = ['--', '.', ':!.webcodexbridge/**'];
 
 export async function runGit(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync('git', args, { cwd });
@@ -59,6 +60,34 @@ export async function getStatusShort(cwd: string): Promise<string> {
   return runGit(cwd, ['status', '--short']);
 }
 
+export async function getCodeDiffStatAgainstHead(cwd: string): Promise<string> {
+  return runGit(cwd, ['diff', '--stat', 'HEAD', ...codeDiffPathspec]);
+}
+
+export async function getCodeDiffAgainstHead(cwd: string): Promise<string> {
+  const diff = await runGit(cwd, ['diff', 'HEAD', ...codeDiffPathspec]);
+  let untrackedDiff = '';
+  try {
+    const statusLines = await runGit(cwd, ['status', '--porcelain', ...codeDiffPathspec]);
+    const untrackedFiles = statusLines
+      .split('\n')
+      .filter((line) => line.startsWith('?? '))
+      .map((line) => line.slice(3));
+
+    for (const file of untrackedFiles) {
+      try {
+        const hash = await runGit(cwd, ['hash-object', file]);
+        untrackedDiff += `untracked: ${file} ${hash}\n`;
+      } catch {
+        // Ignore if unable to hash file
+      }
+    }
+  } catch {
+    // Ignore if git status fails
+  }
+  return diff + (untrackedDiff ? `\n${untrackedDiff}` : '');
+}
+
 export async function getDiffStat(cwd: string): Promise<string> {
   return runGit(cwd, ['diff', '--stat']);
 }
@@ -82,7 +111,7 @@ export async function resetHard(cwd: string, commitRef: string): Promise<void> {
 
 export async function runShell(cwd: string, command: string): Promise<{ exitCode: number; output: string }> {
   try {
-    const { stdout, stderr } = await execAsync(command, { cwd });
+    const { stdout, stderr } = await execAsync(command, { cwd, maxBuffer: 10 * 1024 * 1024 });
     return { exitCode: 0, output: `${stdout}${stderr}`.trimEnd() };
   } catch (error) {
     if (typeof error === 'object' && error !== null && 'code' in error) {

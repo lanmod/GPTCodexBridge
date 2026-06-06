@@ -89,8 +89,6 @@ describe('publishTaskToGithub', () => {
       description: '发布前必须有结果包。',
       checkout: true
     });
-    await writeFile(path.join(repo, 'README.md'), '# Test Repo\n\nNo snapshot.\n');
-    await commitTask({ cwd: repo });
 
     await expect(
       publishTaskToGithub({

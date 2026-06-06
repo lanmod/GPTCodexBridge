@@ -367,6 +367,60 @@ describe('dashboard server', () => {
       await server.close();
     }
   });
+
+  it('enforces token authentication when a token is configured', async () => {
+    const repo = await createTempGitRepo();
+    dirs.push(repo);
+    await initBridge({ cwd: repo });
+    await createTask({ cwd: repo, title: 'Token task', description: 'Token required.' });
+
+    const token = 'test-token-1234';
+    const server = await createDashboardServer({ cwd: repo, port: 0, token });
+    try {
+      // 1. Request page without token -> should fail with 403
+      const resPageNoToken = await fetch(`${server.url}/`);
+      expect(resPageNoToken.status).toBe(403);
+
+      // 2. Request page with token -> should succeed
+      const resPageWithToken = await fetch(`${server.url}/?token=${token}`);
+      expect(resPageWithToken.status).toBe(200);
+
+      // 3. Request API state without token -> should fail
+      const resStateNoToken = await fetch(`${server.url}/api/state`);
+      expect(resStateNoToken.status).toBe(403);
+
+      // 4. Request API state with query token -> should succeed
+      const resStateQueryToken = await fetch(`${server.url}/api/state?token=${token}`);
+      expect(resStateQueryToken.status).toBe(200);
+
+      // 5. Request API state with header token -> should succeed
+      const resStateHeaderToken = await fetch(`${server.url}/api/state`, {
+        headers: { 'X-WCB-Token': token }
+      });
+      expect(resStateHeaderToken.status).toBe(200);
+
+      // 6. Post action without token -> should fail
+      const resActionNoToken = await fetch(`${server.url}/api/actions/refresh`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' }
+      });
+      expect(resActionNoToken.status).toBe(403);
+
+      // 7. Post action with token -> should bypass token check but fail with 500 due to unknown action
+      const resActionWithToken = await fetch(`${server.url}/api/actions/refresh`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'X-WCB-Token': token
+        }
+      });
+      expect(resActionWithToken.status).toBe(500);
+      const actionResult = await resActionWithToken.json();
+      expect(actionResult.error).toContain('未知操作');
+    } finally {
+      await server.close();
+    }
+  });
 });
 
 async function postAction(serverUrl: string, action: string, body: Record<string, unknown>) {
