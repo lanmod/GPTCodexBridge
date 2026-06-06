@@ -64,6 +64,7 @@ describe('dashboard server', () => {
       const response = await fetch(`${server.url}/api/state`);
       const state = await response.json();
 
+      expect(state.projectPath).toBe(repo);
       expect(state.status.branch).toBe(task.branchName);
       expect(state.status.isDirty).toBe(true);
       expect(state.status.activeTask.title).toBe('Review local audit');
@@ -350,6 +351,7 @@ describe('dashboard server', () => {
       expect(html).toContain('GitHub 发布');
       expect(html).toContain('下一步位置');
       expect(html).toContain('id="copyState"');
+      expect(html).toContain('id="projectPath"');
       expect(html).toContain('name="title"');
       expect(html).toContain('name="description"');
       expect(html).toContain('name="verifyCommand"');

@@ -6,6 +6,7 @@ export type BridgeConfig = {
 
 export type CommandContext = {
   cwd: string;
+  internalDogfood?: boolean;
 };
 
 export type InitResult = {

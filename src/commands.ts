@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { cp, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -60,6 +60,8 @@ export async function createTask(options: CreateTaskOptions): Promise<BridgeTask
     throw new Error('Tasks must be created inside a Git repository.');
   }
 
+  await checkNotToolRepository(options.cwd, options);
+
   const statusShort = await getStatusShort(options.cwd);
   if (hasNonBridgeDirtyChanges(statusShort) && !options.allowDirty) {
     throw new Error('创建任务前需要先提交、stash 或清理当前代码改动。确实要带着改动创建任务时，请使用 --allow-dirty。');
@@ -104,6 +106,7 @@ export async function getBridgeStatus(context: CommandContext): Promise<BridgeSt
 }
 
 export async function createSnapshot(options: SnapshotOptions): Promise<SnapshotResult> {
+  await checkNotToolRepository(options.cwd, options);
   const task = await requireActiveTaskOnBranch(options.cwd);
 
   const verification = options.verifyCommand
@@ -161,6 +164,7 @@ export async function createSnapshot(options: SnapshotOptions): Promise<Snapshot
 }
 
 export async function commitTask(context: CommandContext): Promise<CommitResult> {
+  await checkNotToolRepository(context.cwd, context);
   const task = await requireActiveTaskOnBranch(context.cwd);
   const statusShort = await getStatusShort(context.cwd);
   if (!statusShort) {
@@ -193,6 +197,7 @@ export async function commitTask(context: CommandContext): Promise<CommitResult>
 }
 
 export async function rollbackTask(options: RollbackOptions): Promise<RollbackResult> {
+  await checkNotToolRepository(options.cwd, options);
   const task = await requireActiveTaskOnBranch(options.cwd);
   const statusShort = await getStatusShort(options.cwd);
   if (statusShort && !options.force) {
@@ -215,6 +220,7 @@ export async function rollbackTask(options: RollbackOptions): Promise<RollbackRe
 }
 
 export async function createCodexPrompt(options: CodexPromptOptions): Promise<CodexPromptResult> {
+  await checkNotToolRepository(options.cwd, options);
   const task = await requireActiveTaskOnBranch(options.cwd);
   const verifyCommand = options.verifyCommand ?? 'npm test -- --run';
   const promptPath = path.join(options.cwd, bridgeDirName, 'tasks', task.id, 'codex-prompt.md');
@@ -258,6 +264,7 @@ export async function createCodexPrompt(options: CodexPromptOptions): Promise<Co
 }
 
 export async function publishTaskToGithub(options: GithubPublishOptions): Promise<GithubPublishResult> {
+  await checkNotToolRepository(options.cwd, options);
   const task = await requireActiveTaskOnBranch(options.cwd);
   const statusShort = await getStatusShort(options.cwd);
   if (hasNonBridgeDirtyChanges(statusShort)) {
@@ -299,6 +306,7 @@ export async function publishTaskToGithub(options: GithubPublishOptions): Promis
 }
 
 export async function createGithubPackage(options: GithubPackageOptions): Promise<GithubPackageResult> {
+  await checkNotToolRepository(options.cwd, options);
   const task = await requireActiveTaskOnBranch(options.cwd);
   const snapshotPath = task.latestSnapshotPath ?? await latestSnapshotPath(options.cwd, task.id);
   if (!snapshotPath) {
@@ -426,6 +434,28 @@ function hasNonBridgeDirtyChanges(statusShort: string): boolean {
     .split('\n')
     .filter(Boolean)
     .some((line) => !line.slice(3).startsWith('.webcodexbridge/'));
+}
+
+async function checkNotToolRepository(cwd: string, options: { internalDogfood?: boolean }): Promise<void> {
+  if (options.internalDogfood) {
+    return;
+  }
+  const packageJsonPath = path.join(cwd, 'package.json');
+  try {
+    const content = await readFile(packageJsonPath, 'utf8');
+    const pkg = JSON.parse(content);
+    if (pkg.name === 'webcodexbridge' || pkg.name === 'gptcodexbridge') {
+      throw new Error(
+        '当前目录为 WebCodexBridge 工具源码仓库本身。\n' +
+        '不建议在工具源码仓库内直接创建或操作业务项目任务。\n' +
+        '请进入您实际的开发项目目录后再运行 wcb 命令。如果确实需要在此开发 Bridge 自身，请使用 --internal-dogfood 参数。'
+      );
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('当前目录为 WebCodexBridge 工具源码仓库本身')) {
+      throw error;
+    }
+  }
 }
 
 async function backupBridgeMetadata(cwd: string): Promise<{ tempDir: string; bridgeBackupDir: string }> {

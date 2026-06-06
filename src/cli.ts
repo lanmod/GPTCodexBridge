@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { randomBytes } from 'node:crypto';
+import path from 'node:path';
 import {
   commitTask,
   createCodexPrompt,
@@ -15,16 +16,29 @@ import {
 import { createDashboardServer } from './dashboard.js';
 
 async function main(): Promise<void> {
+  const projectIndex = process.argv.indexOf('--project');
+  let cwd = process.cwd();
+  if (projectIndex !== -1 && process.argv[projectIndex + 1]) {
+    cwd = path.resolve(process.cwd(), process.argv[projectIndex + 1]);
+    process.argv.splice(projectIndex, 2);
+  }
+
+  const dogfoodIndex = process.argv.indexOf('--internal-dogfood');
+  const internalDogfood = dogfoodIndex !== -1;
+  if (internalDogfood) {
+    process.argv.splice(dogfoodIndex, 1);
+  }
+
   const [command] = process.argv.slice(2);
 
   if (command === 'init') {
-    const result = await initBridge({ cwd: process.cwd() });
+    const result = await initBridge({ cwd });
     console.log(`Initialized WebCodexBridge at ${result.configPath}`);
     return;
   }
 
   if (command === 'doctor') {
-    const diagnostics = await checkBridgeEnvironment({ cwd: process.cwd() });
+    const diagnostics = await checkBridgeEnvironment({ cwd });
     for (const check of diagnostics.checks) {
       console.log(`${check.ok ? 'OK' : '缺失'} ${check.name}: ${check.detail}`);
     }
@@ -35,10 +49,11 @@ async function main(): Promise<void> {
 
   if (command === 'task' && process.argv[3] === 'create') {
     const task = await createTask({
-      cwd: process.cwd(),
+      cwd,
       title: readFlag('--title'),
       description: readFlag('--description'),
-      checkout: process.argv.includes('--checkout')
+      checkout: process.argv.includes('--checkout'),
+      internalDogfood
     });
     console.log(`Created task ${task.id}`);
     console.log(`Branch: ${task.branchName}`);
@@ -47,15 +62,16 @@ async function main(): Promise<void> {
 
   if (command === 'codex' && process.argv[3] === 'prompt') {
     const result = await createCodexPrompt({
-      cwd: process.cwd(),
-      verifyCommand: optionalFlag('--verify')
+      cwd,
+      verifyCommand: optionalFlag('--verify'),
+      internalDogfood
     });
     console.log(`Codex 执行提示: ${result.path}`);
     return;
   }
 
   if (command === 'status') {
-    const status = await getBridgeStatus({ cwd: process.cwd() });
+    const status = await getBridgeStatus({ cwd });
     console.log(`Branch: ${status.branch}`);
     console.log(`Dirty: ${status.isDirty ? 'yes' : 'no'}`);
     console.log(`Active task: ${status.activeTask ? status.activeTask.id : 'none'}`);
@@ -65,15 +81,16 @@ async function main(): Promise<void> {
 
   if (command === 'snapshot') {
     const snapshot = await createSnapshot({
-      cwd: process.cwd(),
-      verifyCommand: optionalFlag('--verify')
+      cwd,
+      verifyCommand: optionalFlag('--verify'),
+      internalDogfood
     });
     console.log(`Snapshot written: ${snapshot.path}`);
     return;
   }
 
   if (command === 'commit') {
-    const result = await commitTask({ cwd: process.cwd() });
+    const result = await commitTask({ cwd, internalDogfood });
     console.log(`Committed ${result.commit}`);
     console.log(result.message);
     return;
@@ -81,8 +98,9 @@ async function main(): Promise<void> {
 
   if (command === 'rollback') {
     const result = await rollbackTask({
-      cwd: process.cwd(),
-      force: process.argv.includes('--force')
+      cwd,
+      force: process.argv.includes('--force'),
+      internalDogfood
     });
     console.log(`Rolled back task ${result.taskId} to ${result.baseCommit}`);
     return;
@@ -91,7 +109,7 @@ async function main(): Promise<void> {
   if (command === 'serve') {
     const token = randomBytes(16).toString('hex');
     const server = await createDashboardServer({
-      cwd: process.cwd(),
+      cwd,
       port: Number(optionalFlag('--port') ?? '8787'),
       token
     });
@@ -102,8 +120,9 @@ async function main(): Promise<void> {
 
   if (command === 'github' && process.argv[3] === 'publish') {
     const result = await publishTaskToGithub({
-      cwd: process.cwd(),
-      base: optionalFlag('--base')
+      cwd,
+      base: optionalFlag('--base'),
+      internalDogfood
     });
     console.log(`GitHub PR: ${result.prUrl}`);
     return;
@@ -111,8 +130,9 @@ async function main(): Promise<void> {
 
   if (command === 'github' && process.argv[3] === 'package') {
     const result = await createGithubPackage({
-      cwd: process.cwd(),
-      base: optionalFlag('--base')
+      cwd,
+      base: optionalFlag('--base'),
+      internalDogfood
     });
     console.log(`GitHub 交接包: ${result.path}`);
     return;

@@ -64,4 +64,31 @@ describe('audit safety', () => {
 
     await expect(commitTask({ cwd: repo })).rejects.toThrow('重新生成 snapshot');
   });
+
+  it('rejects task actions when executed directly inside the WCB tool repository', async () => {
+    const repo = await createTempGitRepo();
+    dirs.push(repo);
+    await initBridge({ cwd: repo });
+
+    // Mock package.json designating this as the tool repository
+    await writeFile(path.join(repo, 'package.json'), JSON.stringify({ name: 'webcodexbridge' }), 'utf8');
+    execFileSync('git', ['add', 'package.json'], { cwd: repo });
+    execFileSync('git', ['commit', '-m', 'add package.json'], { cwd: repo });
+
+    // Attempting to create a task should throw
+    await expect(createTask({ cwd: repo, title: 'self test', description: 'self test' }))
+      .rejects
+      .toThrow('当前目录为 WebCodexBridge 工具源码仓库本身');
+
+    // Using internalDogfood bypass should succeed
+    const task = await createTask({
+      cwd: repo,
+      title: 'dogfood test',
+      description: 'dogfood test',
+      internalDogfood: true,
+      checkout: true
+    });
+    expect(task.title).toBe('dogfood test');
+  });
 });
+

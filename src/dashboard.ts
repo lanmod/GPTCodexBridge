@@ -254,6 +254,7 @@ async function readDashboardState(cwd: string) {
     : null;
 
   return {
+    projectPath: cwd,
     status,
     workspace: {
       hasCodeChanges,
@@ -870,6 +871,7 @@ function renderDashboardHtml(token?: string): string {
         <div>
           <h1>WebCodexBridge 任务驾驶舱</h1>
           <p class="subtitle">评审 AI 负责思考，执行 Agent 负责执行，Bridge 负责状态、审计和回滚。</p>
+          <div class="label">管理项目路径：<code id="projectPath">loading</code></div>
         </div>
         <div class="label">数据源：<code>/api/state</code></div>
       </header>
@@ -1090,6 +1092,7 @@ function renderDashboardHtml(token?: string): string {
       }
 
       function render(state) {
+        document.getElementById('projectPath').textContent = state.projectPath;
         document.getElementById('stageLabel').textContent = state.stage.label;
         document.getElementById('stageAction').textContent = state.stage.nextAction;
         document.getElementById('nextLocation').textContent = state.stage.nextLocation;
